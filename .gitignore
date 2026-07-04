@@ -30,6 +30,15 @@ dist/
 build/
 *.egg-info/
 
+# --- Java / Gradle ---
+.gradle/
+build/
+*.class
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+out/
+bin/
+
 # --- Terraform ---
 .terraform/
 .terraform.lock.hcl
