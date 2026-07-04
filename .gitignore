@@ -1,0 +1,52 @@
+# --- Local planning / assistant notes (never committed) ---
+PLAN.md
+MEMORY.md
+.notes/
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/testdata/*.key
+age.key
+*.decrypted.yaml
+kubeconfig
+*.kubeconfig
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# --- Terraform ---
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+crash.log
+tfplan
+tfplan.*
+
+# --- Tooling / OS ---
+.DS_Store
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+node_modules/
+*.log
+tmp/
