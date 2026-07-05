@@ -1,0 +1,24 @@
+# Production overrides. Everything credential-shaped is injected from a Kubernetes
+# secret rendered by SOPS; nothing sensitive has a default here on purpose.
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:8}
+      minimum-idle: 2
+
+  flyway:
+    # Migrations run once as a pre-deploy Job, never from the serving pods, so that N
+    # replicas starting simultaneously cannot race on the schema history table.
+    enabled: false
+
+management:
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      environment: prod
+
+logging:
+  level:
+    root: INFO

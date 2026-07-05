@@ -1,0 +1,30 @@
+# Developer laptop profile: human-readable logs, verbose SQL, full traces, and no
+# sampling so every request is visible while working on the service.
+spring:
+  jpa:
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  structured:
+    format:
+      console: ""
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %highlight(%-5level) [%X{requestId:-}] %logger{36} - %msg%n"
+  level:
+    dev.tahir.blueprint: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  tracing:
+    sampling:
+      probability: 1.0
