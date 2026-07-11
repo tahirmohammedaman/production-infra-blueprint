@@ -1,0 +1,78 @@
+# Local stack. `make up` brings this up; `make down` removes it including volumes.
+#
+# Compatible with both `docker compose` and `podman-compose`: no BuildKit-only fields,
+# no `extends`, and every dependency expressed with a real healthcheck rather than a
+# sleep, so start-up ordering is deterministic on a cold machine.
+
+name: blueprint
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      POSTGRES_DB: ${DB_NAME:-blueprint}
+      POSTGRES_USER: ${DB_USER:-blueprint}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-blueprint}
+      # Checksums cost a few percent of write throughput and are the difference between
+      # detecting silent corruption and restoring from a backup that already contains it.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - max_connections=50
+      - -c
+      - shared_buffers=128MB
+      # Emit slow queries so the local stack surfaces the same problems production would.
+      - -c
+      - log_min_duration_statement=250ms
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-blueprint} -d ${DB_NAME:-blueprint}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../../app
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0-local}
+    image: blueprint-api:${APP_VERSION:-0.1.0-local}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-blueprint}
+      DB_USER: ${DB_USER:-blueprint}
+      DB_PASSWORD: ${DB_PASSWORD:-blueprint}
+      OTLP_ENDPOINT: http://tempo:4318/v1/traces
+      TRACE_SAMPLE_RATE: "1.0"
+    ports:
+      - "${API_PORT:-8080}:8080"
+      - "${MGMT_PORT:-9090}:9090"
+    # The image has no shell, so the healthcheck cannot be a CMD-SHELL curl. Readiness is
+    # asserted by scripts/smoke-test.sh against the management port instead; a healthcheck
+    # that silently never runs is worse than no healthcheck at all.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    # Mirrors the Kubernetes limits, which are derived from measured RSS (~361 MB under
+    # load in the container smoke test). See docs/cost-analysis.md.
+    mem_limit: 512m
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
