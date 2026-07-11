@@ -2,6 +2,7 @@ plugins {
     java
     alias(libs.plugins.spring.boot)
     alias(libs.plugins.spring.dependency.management)
+    alias(libs.plugins.spotless)
 }
 
 group = "dev.tahir"
@@ -37,6 +38,28 @@ dependencies {
     testImplementation(libs.archunit.junit5)
 }
 
+// Formatting is a build gate, not a review topic. `spotlessCheck` runs as part of
+// `check`, so CI fails on style drift without a human having to notice it.
+spotless {
+    java {
+        target("src/**/*.java")
+        palantirJavaFormat()
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+        importOrder("java", "javax", "jakarta", "org", "com", "")
+    }
+    kotlinGradle {
+        target("*.gradle.kts")
+        ktlint()
+    }
+    format("misc") {
+        target("src/**/*.yml", "src/**/*.sql", "*.md")
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("-Xlint:all", "-parameters"))
@@ -50,16 +73,37 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
-    // Layered output is what the Dockerfile splits into cacheable image layers.
+    // Fixed name so the Dockerfile never has to glob for a versioned artifact.
+    archiveFileName = "app.jar"
     layered {
         enabled = true
     }
 }
 
-// The container is built from an exploded, layered JAR rather than the fat JAR, so
-// dependency layers stay cached across application-only changes.
-tasks.register<Sync>("unpackBootJar") {
+// Prints the module set the container's jlink runtime is built from, so the curated list
+// in the Dockerfile can be diffed against what jdeps actually observes after a dependency
+// bump. jdeps under-reports reflective and ServiceLoader use, so its output is a review
+// aid, not the source of truth.
+tasks.register<Exec>("printJdepsModules") {
+    group = "verification"
+    description = "Report JDK modules reachable from the runtime classpath"
     dependsOn(tasks.bootJar)
-    from(zipTree(tasks.bootJar.get().archiveFile))
-    into(layout.buildDirectory.dir("unpacked"))
+    val javaHome =
+        javaToolchains
+            .launcherFor(java.toolchain)
+            .get()
+            .metadata.installationPath
+    commandLine(
+        "$javaHome/bin/jdeps",
+        "--ignore-missing-deps",
+        "--print-module-deps",
+        "--multi-release",
+        "21",
+        "--recursive",
+        tasks.bootJar
+            .get()
+            .archiveFile
+            .get()
+            .asFile.absolutePath,
+    )
 }
