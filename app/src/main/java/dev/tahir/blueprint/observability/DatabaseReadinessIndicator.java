@@ -3,7 +3,9 @@ package dev.tahir.blueprint.observability;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+
 import javax.sql.DataSource;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.health.Health;
@@ -44,7 +46,9 @@ public class DatabaseReadinessIndicator implements HealthIndicator {
                     .build();
         } catch (SQLException ex) {
             log.warn("database readiness check failed: {}", ex.getMessage());
-            return Health.down().withDetail("error", ex.getClass().getSimpleName()).build();
+            return Health.down()
+                    .withDetail("error", ex.getClass().getSimpleName())
+                    .build();
         }
     }
 }

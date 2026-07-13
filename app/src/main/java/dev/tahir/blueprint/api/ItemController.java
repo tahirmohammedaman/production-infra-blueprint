@@ -1,19 +1,15 @@
 package dev.tahir.blueprint.api;
 
-import dev.tahir.blueprint.api.dto.ItemRequest;
-import dev.tahir.blueprint.api.dto.ItemResponse;
-import dev.tahir.blueprint.api.dto.PageResponse;
-import dev.tahir.blueprint.domain.Item;
-import dev.tahir.blueprint.domain.ItemService;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
+import java.net.URI;
+import java.util.UUID;
+
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import java.net.URI;
-import java.util.UUID;
+
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -26,7 +22,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.http.HttpStatus;
+
+import dev.tahir.blueprint.api.dto.ItemRequest;
+import dev.tahir.blueprint.api.dto.ItemResponse;
+import dev.tahir.blueprint.api.dto.PageResponse;
+import dev.tahir.blueprint.domain.Item;
+import dev.tahir.blueprint.domain.ItemService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
 @RequestMapping("/api/v1/items")
@@ -61,8 +64,7 @@ public class ItemController {
     @Operation(summary = "Create an item")
     public ResponseEntity<ItemResponse> create(@Valid @RequestBody ItemRequest request) {
         Item created = service.create(request.name(), request.description(), request.quantity());
-        return ResponseEntity
-                .created(URI.create("/api/v1/items/" + created.getId()))
+        return ResponseEntity.created(URI.create("/api/v1/items/" + created.getId()))
                 .body(ItemResponse.from(created));
     }
 

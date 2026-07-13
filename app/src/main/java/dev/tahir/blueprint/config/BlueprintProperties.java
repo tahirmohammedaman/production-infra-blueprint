@@ -1,7 +1,9 @@
 package dev.tahir.blueprint.config;
 
-import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
+
+import jakarta.validation.constraints.NotNull;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -13,6 +15,5 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 public record BlueprintProperties(@NotNull Metrics metrics) {
 
-    public record Metrics(@NotNull Duration itemCountRefresh) {
-    }
+    public record Metrics(@NotNull Duration itemCountRefresh) {}
 }

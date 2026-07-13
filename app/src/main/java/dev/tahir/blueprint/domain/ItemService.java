@@ -2,6 +2,7 @@ package dev.tahir.blueprint.domain;
 
 import java.util.List;
 import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;

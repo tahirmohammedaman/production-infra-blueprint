@@ -7,6 +7,7 @@ springDependencyManagement = "1.1.7"
 springdoc = "2.8.9"
 logstashEncoder = "8.1"
 archunit = "1.4.0"
+spotless = "7.0.4"
 
 [libraries]
 spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web" }
@@ -33,3 +34,4 @@ archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
 spring-dependency-management = { id = "io.spring.dependency-management", version.ref = "springDependencyManagement" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }

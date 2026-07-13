@@ -1,0 +1,64 @@
+# Local gate that mirrors the CI checks. Install once with `pre-commit install`.
+# Everything here also runs in CI: a hook that only exists locally is not a control,
+# because it can be bypassed with --no-verify and never noticed.
+
+default_install_hook_types: [pre-commit, commit-msg]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        # Kustomize and Helm outputs are not plain YAML documents.
+        exclude: ^deploy/k8s/overlays/.*/patch-.*\.yaml$
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: detect-private-key
+
+  # Credentials must never reach the history in the first place; rotating a leaked key
+  # is far more expensive than failing a commit.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint-docker
+        files: (^|/)Dockerfile$
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        files: ^scripts/.*\.sh$
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.99.0
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.0.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: spotless
+        name: spotless (java formatting)
+        entry: bash -c 'cd app && ./gradlew --quiet spotlessCheck'
+        language: system
+        files: ^app/src/.*\.java$
+        pass_filenames: false

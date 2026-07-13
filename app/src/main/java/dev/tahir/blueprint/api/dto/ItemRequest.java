@@ -8,5 +8,4 @@ import jakarta.validation.constraints.Size;
 public record ItemRequest(
         @NotBlank @Size(max = 200) String name,
         @Size(max = 2000) String description,
-        @Min(0) @Max(1_000_000) int quantity) {
-}
+        @Min(0) @Max(1_000_000) int quantity) {}
