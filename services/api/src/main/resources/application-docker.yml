@@ -1,0 +1,30 @@
+# Profile used by the Compose stack. Closest thing to production that still runs on a
+# laptop: structured JSON logs and the real observability wiring, but migrations run from
+# the application (there is no separate migration Job locally) and every trace is sampled.
+spring:
+  flyway:
+    enabled: true
+
+management:
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      # Enabled only when the observability profile of the Compose stack is running.
+      # Left on without a collector, the exporter logs an ERROR every 15 seconds and
+      # trains everyone reading the logs to ignore ERROR.
+      export:
+        enabled: ${OTLP_EXPORT_ENABLED:false}
+
+logging:
+  level:
+    dev.tahir.blueprint: DEBUG
+
+blueprint:
+  kafka:
+    # Locally there is no deploy pipeline to create topics, so the app does it at startup.
+    create-topics: true

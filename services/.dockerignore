@@ -1,0 +1,21 @@
+# Only build inputs belong in the context. Everything else slows the build and risks
+# baking local state or credentials into an image layer.
+*
+!gradle/
+!gradlew
+!settings.gradle.kts
+!build.gradle.kts
+!gradle.properties
+!platform/build.gradle.kts
+!platform/src/
+!api/build.gradle.kts
+!api/src/
+!worker/build.gradle.kts
+!worker/src/
+
+# Re-exclude anything that could sneak in under the allowlisted paths.
+**/.gradle/
+**/build/
+**/*.env
+**/.env
+**/*.log

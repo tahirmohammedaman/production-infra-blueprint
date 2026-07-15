@@ -1,0 +1,184 @@
+spring:
+  application:
+    name: blueprint-api
+    version: ${APP_VERSION:0.1.0-SNAPSHOT}
+
+  # Spring MVC on virtual threads: blocking JDBC calls no longer pin a platform thread,
+  # so the pool below is the only real concurrency limit and the container can be sized
+  # from measured heap rather than from thread-stack reservations.
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:blueprint}
+    username: ${DB_USER:blueprint}
+    password: ${DB_PASSWORD:blueprint}
+    hikari:
+      # Sized against the Postgres max_connections budget shared by all replicas,
+      # not against expected request concurrency. See docs/operations.md.
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN:2}
+      connection-timeout: 3000
+      validation-timeout: 2000
+      idle-timeout: 300000
+      max-lifetime: 900000
+      keepalive-time: 120000
+      pool-name: blueprint-pool
+
+  jpa:
+    # Schema is owned by Flyway. Hibernate is never allowed to alter it.
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+          time_zone: UTC
+        order_inserts: true
+        order_updates: true
+        query:
+          fail_on_pagination_over_collection_fetch: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+      connect-timeout: 2s
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 4
+          min-idle: 1
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # acks=all with idempotence: the relay must not mark a row published unless every
+      # in-sync replica has it. On a single-broker cluster this is equivalent to acks=1,
+      # but the setting is correct for the day a second broker exists, and costs nothing.
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 20000
+        request.timeout.ms: 8000
+        # Bounded so a broker outage surfaces as a relay retry with a metric, rather than
+        # as producer threads blocking for the default two minutes.
+        max.block.ms: 8000
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: 8080
+  # Graceful shutdown is the load-bearing half of the zero-downtime story: on SIGTERM the
+  # connector stops accepting, in-flight requests get the window below to finish, and only
+  # then does the context close. The Kubernetes terminationGracePeriodSeconds must exceed it.
+  shutdown: graceful
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    whitelabel:
+      enabled: false
+  tomcat:
+    max-http-form-post-size: 256KB
+    connection-timeout: 5s
+  forward-headers-strategy: framework
+
+management:
+  # Operational surface lives on its own port so the public ingress can route 8080 only.
+  # Nothing under /actuator is reachable from the internet.
+  server:
+    port: 9090
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+      group:
+        liveness:
+          include: livenessState
+        # Postgres and Redis gate readiness; Kafka deliberately does not. The outbox
+        # absorbs a broker outage — writes still commit and are published when the broker
+        # returns — so removing the API from the load balancer because Kafka is down would
+        # convert a degraded async path into a total outage. See docs/adr/0007.
+        readiness:
+          include: readinessState,databaseReadiness,cacheReadiness
+  health:
+    defaults:
+      enabled: false
+    db:
+      enabled: false
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      version: ${spring.application.version}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      # Explicit buckets keep histogram cardinality bounded and are what the SLO
+      # burn-rate rules in observability/prometheus/rules/slo.yml query against.
+      slo:
+        http.server.requests: 50ms,100ms,250ms,500ms,1s,2s
+  observations:
+    key-values:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACE_SAMPLE_RATE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+logging:
+  structured:
+    format:
+      console: ecs
+  level:
+    root: INFO
+    dev.tahir.blueprint: ${LOG_LEVEL_APP:INFO}
+    org.hibernate.SQL: WARN
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+blueprint:
+  metrics:
+    item-count-refresh: PT30S
+  outbox:
+    poll-interval: PT1S
+    metrics-interval: PT15S
+    batch-size: 100
+    max-attempts: 10
+    send-timeout-seconds: 10
+  reconcile:
+    enabled: true
+    initial-delay: PT30S
+    interval: PT5M
+  kafka:
+    # Serving pods do not create topics in production; the deploy-time Job does.
+    create-topics: false
+    partitions: 3
+    replication-factor: 1
