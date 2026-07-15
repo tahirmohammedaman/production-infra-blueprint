@@ -1,0 +1,111 @@
+spring:
+  application:
+    name: blueprint-worker
+    version: ${APP_VERSION:0.1.0-SNAPSHOT}
+
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+      connect-timeout: 2s
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_GROUP_ID:blueprint-worker}
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # earliest, so a newly deployed consumer group processes the backlog rather than
+      # silently skipping every event produced before it started.
+      auto-offset-reset: earliest
+      # Offsets are committed by the listener container after each handled record, never by
+      # a background timer that would commit records the handler has not finished.
+      enable-auto-commit: false
+      properties:
+        # Bounded so one slow record cannot exceed the poll interval and trigger a rebalance
+        # loop, where the consumer is evicted mid-batch and reprocesses forever.
+        max.poll.records: 50
+        max.poll.interval.ms: 300000
+    listener:
+      ack-mode: record
+      observation-enabled: true
+
+server:
+  # The worker has no public API, so unlike the gateway-facing API service there is nothing
+  # to separate the operational surface from: this single listener serves only actuator.
+  # Kubernetes probes and Prometheus scrape it; no Ingress or Service routes to it.
+  port: 9090
+  # SIGTERM must let the in-flight record finish and its offset commit. Cutting a consumer
+  # off mid-record is safe here only because processing is idempotent — but it still costs a
+  # redelivery, so draining is cheaper.
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+      group:
+        liveness:
+          include: livenessState
+        # Readiness asserts the consumer is actually consuming. Redis is included because
+        # the projection is unwritable without it; Kafka is not, because the listener
+        # container's own state already covers broker reachability.
+        readiness:
+          include: readinessState,consumerReadiness,redis
+  health:
+    defaults:
+      enabled: false
+    redis:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      version: ${spring.application.version}
+    distribution:
+      percentiles-histogram:
+        blueprint.events.end.to.end: true
+  tracing:
+    sampling:
+      probability: ${TRACE_SAMPLE_RATE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+      export:
+        enabled: ${OTLP_EXPORT_ENABLED:false}
+
+logging:
+  structured:
+    format:
+      console: ecs
+  level:
+    root: INFO
+    dev.tahir.blueprint: ${LOG_LEVEL_APP:INFO}
+
+blueprint:
+  kafka:
+    # The worker never creates topics in production either; the deploy Job does. The test
+    # profile turns this on so the suite is self-contained.
+    create-topics: false
+    partitions: 3
+    replication-factor: 1
+  consumer:
+    group-id: ${KAFKA_GROUP_ID:blueprint-worker}
+    concurrency: 3
+    idempotency-ttl: PT24H
+    retry:
+      initial-interval-ms: 500
+      multiplier: 2.0
+      max-interval-ms: 10000
+      max-elapsed-ms: 60000

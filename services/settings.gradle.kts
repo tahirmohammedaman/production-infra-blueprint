@@ -15,6 +15,7 @@ rootProject.name = "blueprint"
 
 include("platform")
 include("api")
+include("worker")
 
 // Repositories are declared centrally and projects are forbidden from adding their own,
 // so the set of hosts this build will fetch code from is auditable in one place.
