@@ -10,9 +10,11 @@ source scripts/lib.sh
 
 COMPOSE=$(compose_cmd)
 COMPOSE_FILE="deploy/compose/docker-compose.yml"
+OVERLAYS=$(compose_overlays)
 
 log "stopping the stack and removing volumes"
-$COMPOSE -f "$COMPOSE_FILE" down --volumes --remove-orphans || true
+# shellcheck disable=SC2086
+$COMPOSE -f "$COMPOSE_FILE" $OVERLAYS down --volumes --remove-orphans || true
 ok "stack removed"
 
 if [ "${PRUNE_IMAGES:-false}" = "true" ]; then

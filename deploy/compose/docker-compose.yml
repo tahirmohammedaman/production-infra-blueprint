@@ -1,18 +1,78 @@
-# Local stack. `make up` brings this up; `make down` removes it including volumes.
+# Local stack: gateway, two services, and the three backing stores they depend on.
+# `make bootstrap` brings it up and proves it works; `make down` removes it with volumes.
 #
-# Compatible with both `docker compose` and `podman-compose`: no BuildKit-only fields,
-# no `extends`, and every dependency expressed with a real healthcheck rather than a
-# sleep, so start-up ordering is deterministic on a cold machine.
+# Compatible with both `docker compose` and `podman-compose`: no BuildKit-only fields, no
+# `extends`, and every dependency expressed with a real healthcheck rather than a sleep, so
+# start-up ordering is deterministic on a cold machine.
 
 name: blueprint
 
+# Shared by every container. Note what is NOT here: `cap_drop: ALL`.
+#
+# The stock Postgres and Redis images start as root and drop to their service user in the
+# entrypoint, which needs CAP_SETUID and CAP_SETGID. Dropping all capabilities makes them
+# crashloop with "setresuid failed: Operation not permitted" — a hardening measure that
+# looks correct in review and breaks the stack. Our own images already run as an
+# unprivileged user and never drop privileges, so they can and do drop everything; see
+# x-app-hardening below.
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+
+# Applied only to images we build, which start unprivileged and stay that way.
+x-app-hardening: &app-hardening
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+
 services:
+  # ------------------------------------------------------------------ gateway
+  gateway:
+    image: docker.io/library/traefik:v3.3
+    <<: *service-defaults
+    command:
+      - --providers.docker=true
+      # Nothing is routable until it opts in with a label. The default of exposing every
+      # container means a new backing store arrives on the internet by accident.
+      - --providers.docker.exposedByDefault=false
+      - --entryPoints.web.address=:80
+      - --ping=true
+      - --accesslog=true
+      - --accesslog.format=json
+      - --metrics.prometheus=true
+      - --metrics.prometheus.addEntryPointsLabels=true
+      - --metrics.prometheus.addServicesLabels=true
+      - --api.dashboard=true
+      - --api.insecure=true
+    ports:
+      - "${GATEWAY_PORT:-8080}:80"
+      - "${GATEWAY_DASHBOARD_PORT:-8081}:8080"
+    volumes:
+      # Rootless podman puts the socket under /run/user/$UID; Docker uses /var/run. The
+      # variable is what lets one compose file serve both, and it is mounted read-only
+      # because a gateway with write access to the container runtime is a root escalation.
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      api:
+        condition: service_started
+    mem_limit: 128m
+
+  # ------------------------------------------------------------- backing stores
   postgres:
     image: docker.io/library/postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    <<: *service-defaults
     environment:
       POSTGRES_DB: ${DB_NAME:-blueprint}
       POSTGRES_USER: ${DB_USER:-blueprint}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-blueprint}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
       # Checksums cost a few percent of write throughput and are the difference between
       # detecting silent corruption and restoring from a backup that already contains it.
       POSTGRES_INITDB_ARGS: "--data-checksums"
@@ -27,52 +87,180 @@ services:
       - log_min_duration_statement=250ms
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # A bind mount rather than a compose `secrets:` block, because compose secrets cannot
+      # carry the `z` flag and SELinux then denies the read — the container sees only
+      # "Permission denied" from its entrypoint. `z` relabels for container access and is a
+      # no-op on hosts without SELinux, so one file works on Fedora and on Ubuntu CI.
+      #
+      # Each service mounts only its own directory. The database password is not in the
+      # directory the API mounts, and neither is in the worker's, which mounts nothing.
+      - ./secrets/postgres:/run/secrets:ro,z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-blueprint} -d ${DB_NAME:-blueprint}"]
       interval: 5s
       timeout: 3s
       retries: 12
       start_period: 10s
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
+    mem_limit: 512m
 
+  redis:
+    image: docker.io/library/redis:7-alpine
+    <<: *service-defaults
+    command:
+      - redis-server
+      # No persistence and no volume: this holds a cache and a projection the API's
+      # reconciler rebuilds from Postgres, so durability would cost write throughput to
+      # protect data that is already derived. Anything written goes to the container layer
+      # and is discarded with it.
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 96mb
+      # The projection counters must not be evicted under pressure, and there is nothing
+      # else in this instance worth evicting, so refuse writes rather than lose state
+      # silently. noeviction turns a capacity problem into a visible error.
+      - --maxmemory-policy
+      - noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    mem_limit: 128m
+
+  kafka:
+    image: docker.io/apache/kafka:3.9.0
+    <<: *service-defaults
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Bare host rather than 0.0.0.0: the image's storage-format step validates the
+      # listener set before advertised.listeners is applied and rejects the meta-address,
+      # exiting 1 with an error that points somewhere else entirely.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # Single broker, so every internal topic must be RF=1. The defaults of 3 leave
+      # __consumer_offsets uncreatable and every consumer hanging with no obvious cause.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_HEAP_OPTS: -Xmx768m -Xms512m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Asks the broker to answer an actual API request. A TCP port check passes while the
+      # broker is still in RECOVERY and not yet serving, which is exactly the window that
+      # makes dependent services fail on startup.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    mem_limit: 1400m
+
+  # ------------------------------------------------------------------ services
   api:
     build:
-      context: ../../app
+      context: ../../services
       dockerfile: Dockerfile
       args:
+        SERVICE: api
         APP_VERSION: ${APP_VERSION:-0.1.0-local}
     image: blueprint-api:${APP_VERSION:-0.1.0-local}
+    <<: *service-defaults
+    # Ordering is by health, not by start. Postgres and Redis must be answering before the
+    # API boots, or it comes up unready, fails its first probes and gets restarted.
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      # Secrets are read from files, never from environment variables: env vars appear in
+      # `docker inspect`, in /proc, in crash dumps, and are inherited by every child process.
+      SPRING_CONFIG_IMPORT: optional:configtree:/run/secrets/
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${DB_NAME:-blueprint}
       DB_USER: ${DB_USER:-blueprint}
-      DB_PASSWORD: ${DB_PASSWORD:-blueprint}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       OTLP_ENDPOINT: http://tempo:4318/v1/traces
       TRACE_SAMPLE_RATE: "1.0"
+    volumes:
+      # The file name is the property name: spring.datasource.password in this directory
+      # becomes that Spring property, read via configtree. In production the same directory
+      # is projected from a SOPS-encrypted Kubernetes secret, so the code path that reads
+      # credentials is identical locally and in the cluster.
+      - ./secrets/app:/run/secrets:ro,z
     ports:
-      - "${API_PORT:-8080}:8080"
+      # Published only so the smoke tests can reach the management port directly. Real
+      # traffic arrives through the gateway.
       - "${MGMT_PORT:-9090}:9090"
-    # The image has no shell, so the healthcheck cannot be a CMD-SHELL curl. Readiness is
-    # asserted by scripts/smoke-test.sh against the management port instead; a healthcheck
-    # that silently never runs is worse than no healthcheck at all.
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m
-    # Mirrors the Kubernetes limits, which are derived from measured RSS (~361 MB under
-    # load in the container smoke test). See docs/cost-analysis.md.
-    mem_limit: 512m
-    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=PathPrefix(`/api`) || PathPrefix(`/swagger-ui`) || PathPrefix(`/v3/api-docs`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      # Routed to 8080 only. The actuator port is never registered with the gateway, so
+      # there is no path through the ingress that reaches it.
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      - "traefik.http.services.api.loadbalancer.healthcheck.path=/actuator/health/readiness"
+      - "traefik.http.services.api.loadbalancer.healthcheck.port=9090"
+      - "traefik.http.services.api.loadbalancer.healthcheck.interval=10s"
+    <<: *app-hardening
+    # 640 MiB, not 512. Measured RSS after the smoke-test workload is 433 MB — the Redis
+    # and Kafka clients added roughly 72 MB over the single-service version, which put the
+    # old 512 MiB limit at 81% utilisation with no headroom for a GC pause or a burst.
+    # Mirrors the Kubernetes limit; see docs/cost-analysis.md for the measurement.
+    mem_limit: 640m
+
+  worker:
+    build:
+      context: ../../services
+      dockerfile: Dockerfile
+      args:
+        SERVICE: worker
+        APP_VERSION: ${APP_VERSION:-0.1.0-local}
+    image: blueprint-worker:${APP_VERSION:-0.1.0-local}
+    <<: *service-defaults
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      # The API owns the topics locally, so the worker waits for it rather than racing to
+      # subscribe to a topic that does not exist yet.
+      api:
+        condition: service_started
+    environment:
+      # `optional:` because the worker mounts no secret directory at all — it has no
+      # database credentials because it has no database. Least privilege is easier to
+      # assert when a service simply never receives the thing it must not have.
+      SPRING_CONFIG_IMPORT: optional:configtree:/run/secrets/
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: blueprint-worker
+      OTLP_ENDPOINT: http://tempo:4318/v1/traces
+    ports:
+      - "${WORKER_MGMT_PORT:-9091}:9090"
+    # No traefik labels: the worker has no public surface at all. Its only listener is the
+    # actuator port, and nothing routes to it.
+    <<: *app-hardening
+    # Measured RSS 311 MB. Lower than the API because there is no JPA/Hibernate metamodel
+    # and no servlet stack serving real traffic — only the actuator listener.
+    mem_limit: 448m
 
 volumes:
   postgres-data:
+  kafka-data:

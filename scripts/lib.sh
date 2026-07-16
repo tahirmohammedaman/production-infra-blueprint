@@ -34,6 +34,47 @@ container_cmd() {
   fi
 }
 
+# Traefik and anything else that talks to the container runtime needs the socket path,
+# which differs between Docker and rootless podman.
+detect_container_socket() {
+  if [ -S "/var/run/docker.sock" ]; then
+    echo "/var/run/docker.sock"
+  elif [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" ]; then
+    echo "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+  else
+    warn "no container socket found; gateway service discovery will not work"
+    echo "/var/run/docker.sock"
+  fi
+}
+
+# Extra compose files needed by the local runtime. Returns the flags to append, or nothing.
+compose_overlays() {
+  local flags=""
+  if command -v podman >/dev/null 2>&1 \
+     && ! command -v docker >/dev/null 2>&1 \
+     && [ "$(getenforce 2>/dev/null || echo Disabled)" = "Enforcing" ]; then
+    flags="-f deploy/compose/docker-compose.podman.yml"
+  fi
+  echo "$flags"
+}
+
+# Creates a secret file if it does not already exist, with an unguessable value and
+# owner-only permissions. Never overwrites: re-running bootstrap must not invalidate the
+# credentials the running database was initialised with.
+generate_secret() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    return 0
+  fi
+  umask 077
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 24 | tr -d '\n' > "$path"
+  else
+    head -c 18 /dev/urandom | base64 | tr -d '\n' > "$path"
+  fi
+  chmod 600 "$path"
+}
+
 # Poll a URL until it returns the expected status, or give up. Used instead of `sleep`
 # so the scripts are deterministic on a slow machine and fast on a warm one.
 wait_for_http() {

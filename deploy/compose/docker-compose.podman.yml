@@ -1,0 +1,24 @@
+# Overlay for rootless podman on an SELinux-enforcing host (Fedora, RHEL, CentOS Stream).
+#
+# Applied automatically by scripts/bootstrap.sh when it detects that combination:
+#   podman-compose -f docker-compose.yml -f docker-compose.podman.yml up -d
+#
+# It exists as an overlay rather than as part of the base file because the setting below
+# weakens the gateway's SELinux confinement, and the gateway is the internet-facing
+# container. That belongs in a file a reader has to opt into, not in the default one.
+
+services:
+  gateway:
+    security_opt:
+      - no-new-privileges:true
+      # Traefik reads the container runtime's socket to discover services. Under rootless
+      # podman that socket lives in /run/user/$UID and carries the `user_tmp_t` SELinux
+      # label, which the default `container_t` process type may not connect to — Traefik
+      # logs "permission denied" and discovers nothing, while every container appears
+      # healthy. Running the gateway as `container_runtime_t` grants exactly that access.
+      #
+      # Preferred over `label=disable`, which would remove SELinux confinement from the
+      # gateway entirely; this narrows the exemption to the runtime socket it actually
+      # needs. Preferred over adding `:z` to the socket mount, which would permanently
+      # relabel the host's podman socket and break podman itself.
+      - label=type:container_runtime_t

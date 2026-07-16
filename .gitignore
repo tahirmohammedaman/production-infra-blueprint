@@ -15,6 +15,11 @@ age.key
 kubeconfig
 *.kubeconfig
 
+# Generated local secret material. The directory and its README are tracked; the
+# secret files themselves never are.
+deploy/compose/secrets/**
+!deploy/compose/secrets/README.md
+
 # --- Python ---
 __pycache__/
 *.py[cod]
