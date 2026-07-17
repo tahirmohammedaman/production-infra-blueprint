@@ -14,6 +14,11 @@ many replicas fit on a node, and therefore what the node has to cost.
 **Method.** Three images built from the same commit and the same 69 MB Spring Boot fat
 JAR, measured with `podman images`. Reproduce with `make image && make image-size`.
 
+> Figures below are for the API image. The worker image built from the same Dockerfile is
+> **164 MB** — smaller because it carries no JPA, servlet or OpenAPI dependencies. Both come
+> from one `Dockerfile` selected by `--build-arg SERVICE`, so the hardening applies to both
+> by construction rather than by remembering to copy it.
+
 | # | Approach | Base image | Image size | vs. naive |
 | --- | --- | --- | ---: | ---: |
 | 0 | Fat JAR on a JDK base | `eclipse-temurin:21-jdk-noble` | **523 MB** | — |
@@ -84,7 +89,47 @@ cites it. Two things follow from that:
   buffers — the non-heap consumption that a heap-only sizing exercise misses and that
   causes JVM containers to be killed while their heap graph looks healthy.
 
-## 4. Still to be measured
+## 4. Whole-stack footprint
+
+**Method.** All six containers running, measured with `podman stats` immediately after
+`scripts/smoke-test.sh` completed, so every code path in the suite has been exercised.
+
+| Container | Measured RSS | Limit | Utilisation |
+| --- | ---: | ---: | ---: |
+| api | 433 MB | 640 MiB | 68% |
+| worker | 311 MB | 448 MiB | 66% |
+| kafka | 326 MB | 1400 MiB | 22% |
+| postgres | 29 MB | 512 MiB | 5% |
+| gateway (Traefik) | 29 MB | 128 MiB | 22% |
+| redis | 7 MB | 128 MiB | 5% |
+| **Total measured** | **~1.14 GB** | | |
+
+Two things this measurement changed:
+
+- **The API limit went from 512 MiB to 640 MiB.** Adding the Redis and Kafka clients cost
+  roughly 72 MB of resident memory over the single-service version, which put the old limit
+  at 81% utilisation — no headroom for a GC pause or a traffic burst. The limit was raised
+  because the number said so, not because 640 is a rounder guess than 512.
+- **Kafka's limit is generous relative to its measured use** (22%), and deliberately.
+  Kafka's real memory consumer is the page cache holding recent segments, which does not
+  appear in the process RSS. Sizing it from RSS alone would produce a broker that looks
+  fine in `stats` and reads every fetch from disk.
+
+Postgres at 29 MB reflects an effectively empty database. It is the one figure here that
+will not survive contact with real data, and the node budget below allows for that rather
+than quoting it as a steady state.
+
+### What that means for the node
+
+The application tier needs roughly 1.2 GB measured, and the observability stack adds
+Prometheus, Loki, Grafana, Alloy and Tempo on top, plus k3s itself. That does not fit the
+smallest ARM instance, and Kafka is the reason: at ~1.4 GB provisioned it is a third of the
+entire budget, which is exactly the trade-off ADR 0004 accepts and records.
+
+The honest framing is not "Kafka is cheap". It is that a self-hosted single-broker Kafka
+costs one instance size, while the managed equivalent has a three-figure monthly floor.
+
+## 5. Still to be measured
 
 - Monthly hosting: k3s on a Hetzner ARM node against the managed equivalent (EKS control
   plane, RDS, managed load balancer).
@@ -92,3 +137,5 @@ cites it. Two things follow from that:
   ingest volume.
 - Log volume per request, and what the retention tiers cost at that rate.
 - Registry storage and egress under the real deploy cadence.
+- Postgres memory under a realistic dataset rather than an empty schema.
+- Kafka page-cache working set under sustained produce load.
