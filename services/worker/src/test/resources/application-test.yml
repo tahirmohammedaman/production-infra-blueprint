@@ -1,0 +1,26 @@
+# Human-readable logs so a failure is legible in CI output, and no trace export: the tests
+# must not require a collector to be reachable.
+logging:
+  structured:
+    format:
+      console: ""
+  level:
+    dev.tahir.blueprint: DEBUG
+    org.testcontainers: INFO
+    com.github.dockerjava: WARN
+    org.apache.kafka: WARN
+
+blueprint:
+  kafka:
+    create-topics: true
+  consumer:
+    # One consumer thread: the assertions are about correctness, not throughput, and
+    # concurrency only adds nondeterminism to the ordering of test assertions.
+    concurrency: 1
+    retry:
+      # Fail fast to the dead-letter topic. The production budget of a minute would make
+      # the DLQ test take a minute.
+      initial-interval-ms: 50
+      multiplier: 1.0
+      max-interval-ms: 50
+      max-elapsed-ms: 200

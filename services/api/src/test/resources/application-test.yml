@@ -1,0 +1,10 @@
+# Test profile. Human-readable logs so a failure is legible in CI output, and no trace
+# export: the tests must not require a collector to be reachable.
+logging:
+  structured:
+    format:
+      console: ""
+  level:
+    dev.tahir.blueprint: DEBUG
+    org.testcontainers: INFO
+    com.github.dockerjava: WARN
