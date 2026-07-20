@@ -7,10 +7,22 @@
 
 plugins {
     java
+    jacoco
     alias(libs.plugins.spring.boot) apply false
     alias(libs.plugins.spring.dependency.management) apply false
     alias(libs.plugins.spotless)
 }
+
+// Classes whose coverage figure would be noise: Spring configuration, application entry
+// points, and DTO/record carriers that have no branches to get wrong.
+val coverageExclusions =
+    listOf(
+        "**/config/**",
+        "**/*Config.class",
+        "**/*Configuration.class",
+        "**/*Application.class",
+        "**/dto/**",
+    )
 
 allprojects {
     group = "dev.tahir"
@@ -19,6 +31,7 @@ allprojects {
 
 subprojects {
     apply(plugin = "java")
+    apply(plugin = "jacoco")
     apply(plugin = "io.spring.dependency-management")
 
     extensions.configure<JavaPluginExtension> {
@@ -48,6 +61,62 @@ subprojects {
         // Testcontainers needs a container runtime; on rootless podman hosts the socket is
         // not at the docker default. Honour it if the caller exported one.
         providers.environmentVariable("DOCKER_HOST").orNull?.let { environment("DOCKER_HOST", it) }
+        finalizedBy(tasks.named("jacocoTestReport"))
+    }
+
+    tasks.named<JacocoReport>("jacocoTestReport") {
+        dependsOn(tasks.named("test"))
+        reports {
+            // XML is what the CI summary step parses; HTML is what a human opens from the
+            // build artifact. CSV exists because two lines of awk beat an XML parser in a
+            // shell step.
+            xml.required = true
+            csv.required = true
+            html.required = true
+        }
+        classDirectories.setFrom(
+            files(
+                classDirectories.files.map {
+                    fileTree(it) { exclude(coverageExclusions) }
+                },
+            ),
+        )
+    }
+
+    // Coverage is a gate, not a dashboard. The threshold is set just under the measured
+    // figure so a real regression fails the build, and raising it is a deliberate commit
+    // rather than a number nobody looks at. Config classes and DTOs are excluded: covering
+    // a record's accessors inflates the number without testing anything.
+    tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+        dependsOn(tasks.named("jacocoTestReport"))
+        classDirectories.setFrom(
+            files(
+                classDirectories.files.map {
+                    fileTree(it) { exclude(coverageExclusions) }
+                },
+            ),
+        )
+        violationRules {
+            rule {
+                limit {
+                    counter = "LINE"
+                    minimum = "0.80".toBigDecimal()
+                }
+            }
+            rule {
+                // A class with no coverage at all is usually a wiring mistake — something
+                // was written and never exercised by any test, unit or integration.
+                element = "CLASS"
+                limit {
+                    counter = "LINE"
+                    minimum = "0.25".toBigDecimal()
+                }
+            }
+        }
+    }
+
+    tasks.named("check") {
+        dependsOn(tasks.named("jacocoTestCoverageVerification"))
     }
 }
 

@@ -56,6 +56,15 @@ test: ## Run the full test suite (unit, slice, and Testcontainers integration)
 check: ## Run tests plus the formatting gate, exactly as CI does
 	cd $(SERVICES_DIR) && $(TC_ENV) $(GRADLE) check
 
+.PHONY: coverage
+coverage: ## Run the tests and print per-service line coverage
+	cd $(SERVICES_DIR) && $(TC_ENV) $(GRADLE) test jacocoTestReport
+	@for s in $(SERVICES); do \
+		csv=$(SERVICES_DIR)/$$s/build/reports/jacoco/test/jacocoTestReport.csv; \
+		test -f $$csv && awk -F, -v s=$$s 'NR>1 { m += $$8; c += $$9 } \
+			END { printf "  %-8s %d/%d lines  %.1f%%\n", s, c, m + c, (c * 100) / (m + c) }' $$csv; \
+	done
+
 .PHONY: fmt
 fmt: ## Reformat sources in place
 	cd $(SERVICES_DIR) && $(GRADLE) spotlessApply

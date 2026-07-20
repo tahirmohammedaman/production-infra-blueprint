@@ -48,6 +48,14 @@ repos:
       - id: terraform_fmt
       - id: terraform_validate
 
+  # Workflow files are executable code with repository write access in scope. actionlint
+  # catches the class of bug YAML validity cannot: bad context expressions, shell quoting
+  # errors inside `run:`, matrix keys nothing reads.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint-docker
+
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.0.0
     hooks:
@@ -58,7 +66,7 @@ repos:
     hooks:
       - id: spotless
         name: spotless (java formatting)
-        entry: bash -c 'cd app && ./gradlew --quiet spotlessCheck'
+        entry: bash -c 'cd services && ./gradlew --quiet spotlessCheck'
         language: system
-        files: ^app/src/.*\.java$
+        files: ^services/.*\.(java|kts)$
         pass_filenames: false

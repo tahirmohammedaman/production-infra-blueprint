@@ -1,0 +1,223 @@
+# Correctness gate. Everything here must pass before a change can reach main.
+#
+# Two properties this pipeline is built around:
+#
+#   1. A change to one service does not rebuild or retest the other. With two JVM services
+#      that each start Postgres, Redis and Kafka in Testcontainers, "just run everything"
+#      costs roughly twice the CI minutes for no extra signal. The `changes` job decides
+#      what actually needs to run; `platform` is shared, so touching it fans back out to
+#      both services.
+#
+#   2. Every gate is an exit code. Nothing here reports into a dashboard and passes anyway.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first. main is excluded because its runs
+# feed the cache and the dependency graph, and cancelling those loses that work.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Read-only by default. Jobs that need more say so themselves, so the blast radius of a
+# compromised action is visible per job rather than assumed workflow-wide.
+permissions:
+  contents: read
+
+env:
+  # Gradle's own daemon is pointless on an ephemeral runner and costs a JVM start.
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never
+
+jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-24.04
+    outputs:
+      # A JSON array consumed directly as a matrix, e.g. ["api"] or ["api","worker"].
+      services: ${{ steps.services.outputs.matrix }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - id: filter
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          filters: |
+            shared:
+              - 'services/*.gradle.kts'
+              - 'services/gradle.properties'
+              - 'services/gradle/**'
+              - 'services/gradlew*'
+              - 'services/platform/**'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/setup-build/**'
+            api:
+              - 'services/api/**'
+            worker:
+              - 'services/worker/**'
+            workflows:
+              - '.github/**'
+            scripts:
+              - 'scripts/**'
+              - 'Makefile'
+
+      - name: Compose the service matrix
+        id: services
+        env:
+          SHARED: ${{ steps.filter.outputs.shared }}
+          API: ${{ steps.filter.outputs.api }}
+          WORKER: ${{ steps.filter.outputs.worker }}
+        run: |
+          set -euo pipefail
+          selected=()
+          # A shared-module or build-script change can break either service, so it fans out
+          # to both. This is the conservative direction to be wrong in.
+          if [[ "${SHARED}" == "true" || "${API}" == "true" ]]; then selected+=("api"); fi
+          if [[ "${SHARED}" == "true" || "${WORKER}" == "true" ]]; then selected+=("worker"); fi
+          matrix=$(printf '%s\n' "${selected[@]:-}" | grep -v '^$' | jq -R . | jq -sc .)
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          echo "Services to build: ${matrix}" >> "${GITHUB_STEP_SUMMARY}"
+
+  format:
+    name: format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-build
+
+      # Spotless covers the whole multi-project at once and takes seconds, so it is not
+      # worth path-filtering. It runs before the test matrix so a formatting-only failure
+      # does not wait behind three Testcontainers stacks.
+      - name: Check formatting
+        working-directory: services
+        run: ./gradlew --console=plain spotlessCheck
+
+  static:
+    name: static analysis
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true' || needs.changes.outputs.scripts == 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # actionlint catches what YAML validity does not: a typo'd context expression, a
+      # shell quoting bug inside `run:`, a matrix key that no job reads. Pinned by digest
+      # because it runs with the repository checked out.
+      - name: Lint workflows
+        run: |
+          docker run --rm \
+            -v "${PWD}:/repo" --workdir /repo \
+            rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
+            -color
+
+      # The bootstrap and smoke scripts are the documented entry point to this repository.
+      # If they are broken, the quickstart in the README is a lie.
+      - name: Lint shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=style --shell=bash scripts/*.sh
+
+  test:
+    name: test (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: ./.github/actions/setup-build
+        with:
+          # main writes the shared cache; pull requests only read it.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # The integration suites start real Postgres, Redis and Kafka containers. Mocking
+      # them would test the mocks: half the defects this repository has found were in the
+      # seam between the application and the actual server.
+      - name: Test
+        working-directory: services
+        run: ./gradlew --console=plain ":${{ matrix.service }}:check"
+
+      - name: Summarise coverage
+        if: always()
+        working-directory: services
+        run: |
+          set -euo pipefail
+          csv="${{ matrix.service }}/build/reports/jacoco/test/jacocoTestReport.csv"
+          [[ -f "${csv}" ]] || { echo "no coverage report produced"; exit 0; }
+          # JaCoCo's CSV columns are stable: LINE_MISSED is 8, LINE_COVERED is 9.
+          awk -F, 'NR>1 { missed += $8; covered += $9 }
+                   END { printf "| %s | %d | %d | %.1f%% |\n", svc, covered + missed, covered,
+                                (covered * 100) / (covered + missed) }' \
+              svc="${{ matrix.service }}" "${csv}" > /tmp/coverage-row
+          {
+            echo "### Coverage — ${{ matrix.service }}"
+            echo
+            echo "| Service | Lines | Covered | Coverage |"
+            echo "| --- | ---: | ---: | ---: |"
+            cat /tmp/coverage-row
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Uploaded on failure only. A green run's reports are noise nobody downloads; a red
+      # run's are the first thing you want, because the runner is already gone.
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/build/reports/
+            services/${{ matrix.service }}/build/test-results/
+          retention-days: 7
+
+  # Submits the resolved dependency graph to GitHub so Dependabot can alert on transitive
+  # CVEs in dependencies the manifests never name. Only from main: a fork PR must not be
+  # able to write to the repository's dependency graph.
+  dependency-graph:
+    name: dependency graph
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          dependency-graph: generate-and-submit
+          validate-wrappers: true
+      - name: Resolve dependencies
+        working-directory: services
+        run: ./gradlew --console=plain :api:dependencies :worker:dependencies --configuration runtimeClasspath > /dev/null
+
+  # Single required status check for branch protection. Without this, adding a job to the
+  # matrix silently makes it non-required, because branch protection matches job names and
+  # nobody remembers to update the list.
+  ci:
+    name: ci
+    runs-on: ubuntu-24.04
+    needs: [changes, format, static, test]
+    if: always()
+    steps:
+      - name: Verify no upstream job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "upstream results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            # `skipped` is a legitimate outcome here: a docs-only change runs no tests.
+            if [[ "${result}" != "success" && "${result}" != "skipped" ]]; then
+              echo "::error::a required job reported '${result}'"
+              exit 1
+            fi
+          done
