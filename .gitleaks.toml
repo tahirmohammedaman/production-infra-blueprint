@@ -1,0 +1,19 @@
+# Gitleaks configuration. Extends the default rule set rather than replacing it — a
+# hand-written rule list is a list of the leak shapes you already thought of.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secrets: examples, fixtures and generated local material"
+
+paths = [
+  # Placeholder values whose whole purpose is to be copied and replaced.
+  '''\.env\.example$''',
+  '''deploy/compose/secrets/README\.md$''',
+  # Test fixtures. Testcontainers generates a throwaway database per run; the credentials
+  # are literal strings in the test sources and are worth exactly nothing outside them.
+  '''services/[^/]+/src/test/.*''',
+  '''services/[^/]+/src/testFixtures/.*''',
+]
+

@@ -75,6 +75,9 @@ public final class KafkaTestBroker {
     }
 
     private static int findFreePort() {
+        // Bound only to ask the kernel for an unused port number, then closed immediately;
+        // nothing is ever read from or written to it. TLS is not applicable.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         try (ServerSocket socket = new ServerSocket(0)) {
             socket.setReuseAddress(true);
             return socket.getLocalPort();

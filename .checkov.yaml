@@ -1,0 +1,31 @@
+# Checkov configuration.
+#
+# Suppressions are listed here rather than as inline `checkov:skip=` comments so that the
+# full set is reviewable in one place instead of scattered across the tree.
+
+quiet: true
+compact: true
+
+skip-path:
+  - services/.*/build/.*
+  - .*/\.gradle/.*
+
+skip-check:
+  # CKV_DOCKER_2 — "ensure a HEALTHCHECK instruction is added".
+  #
+  # Deliberately not added. The runtime image is distroless: it has no shell, no curl and
+  # no wget, so a Docker HEALTHCHECK would have to ship a probe binary purely to satisfy
+  # this check, enlarging the image and adding an executable to a runtime whose entire
+  # point is that it has none. Health is checked where the orchestrator already knows how:
+  # `healthcheck:` in deploy/compose/docker-compose.yml and the readiness/liveness probes
+  # in the Kubernetes manifests, both hitting /actuator/health on port 9090.
+  - CKV_DOCKER_2
+
+  # CKV_DOCKER_7 — "ensure the base image uses a non-latest version tag".
+  #
+  # A false positive on this Dockerfile. Both bases are pinned by sha256 digest, which is
+  # stricter than any tag, but they are supplied through `ARG JDK_IMAGE=...@sha256:...` so
+  # that a rebuild can be retargeted without editing five FROM lines. Checkov evaluates
+  # `FROM ${JDK_IMAGE}` without substituting the ARG default and concludes the tag is
+  # missing. Re-check this if the ARG indirection is ever removed.
+  - CKV_DOCKER_7

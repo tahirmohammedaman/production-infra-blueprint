@@ -1,0 +1,67 @@
+# Rules specific to this repository.
+#
+# The community rulesets cover the generic classes of bug. These four encode invariants
+# this codebase actually depends on, three of which were defects here before they were
+# rules. A convention that lives only in a reviewer's memory is not enforced.
+
+rules:
+  - id: blueprint-broad-exception-handler
+    languages: [java]
+    severity: ERROR
+    message: >-
+      A catch-all @ExceptionHandler in a class that does not extend
+      ResponseEntityExceptionHandler swallows Spring MVC's own exceptions, so an unmapped
+      path returns 500 instead of 404 and ordinary client mistakes burn the error budget.
+      Extend ResponseEntityExceptionHandler, which maps those to their real status codes and
+      leaves the catch-all for genuinely unexpected failures.
+    paths:
+      include:
+        - '/services/*/src/main/**'
+    patterns:
+      - pattern: |
+          @ExceptionHandler($EX.class)
+          $RET $METHOD(...) { ... }
+      - metavariable-regex:
+          metavariable: $EX
+          regex: ^(Exception|Throwable|RuntimeException)$
+      # The catch-all is correct once the framework's own exceptions are handled first,
+      # which is exactly what extending ResponseEntityExceptionHandler does.
+      - pattern-not-inside: |
+          class $CLASS extends ResponseEntityExceptionHandler { ... }
+
+  - id: blueprint-no-secrets-from-environment
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Secrets are delivered as mounted files and read through Spring's configtree:, never
+      from the environment. Environment variables are inherited by every child process,
+      readable through /proc, and captured verbatim in crash dumps and container inspect
+      output. See docs/security.md.
+    paths:
+      include:
+        - '/services/*/src/main/**'
+    pattern: System.getenv(...)
+
+  - id: blueprint-readiness-must-not-include-kafka
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Kafka must not gate readiness. The transactional outbox absorbs a broker outage, so
+      pulling the service out of the load balancer when the broker is down converts a
+      degraded async path into a full outage. See docs/adr/0007-readiness-excludes-kafka.md.
+    paths:
+      include:
+        - '**/application*.yml'
+    pattern-regex: 'readiness:\s*\n\s*include:[^\n]*kafka'
+
+  - id: blueprint-no-plaintext-password-env
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Pass credentials to containers as a file reference (*_PASSWORD_FILE) pointing at a
+      mounted secret, not as a plaintext environment variable.
+    paths:
+      include:
+        - '/deploy/**/*.yml'
+        - '/deploy/**/*.yaml'
+    pattern-regex: '^\s+[A-Z_]*PASSWORD:\s*\S'

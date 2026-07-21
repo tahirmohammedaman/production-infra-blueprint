@@ -1,0 +1,23 @@
+# Trivy suppressions.
+#
+# Policy, not a suggestion: every entry needs a `statement` saying why the finding does not
+# apply here, and an `expired_at` date. An unexplained, unexpiring suppression is how a
+# scanner quietly stops being a control — the entry outlives the reason, nobody remembers
+# who added it, and the next person assumes it was justified.
+#
+# When an entry expires the finding comes back and someone has to look at it again. That is
+# the point.
+#
+#   vulnerabilities:
+#     - id: CVE-0000-00000
+#       paths: ["services/api/build/libs/app.jar"]
+#       statement: "Not reachable: the vulnerable codec is never invoked on our paths."
+#       expired_at: 2026-10-01
+#
+# Empty by design. Findings are fixed by upgrading, not by ignoring; `ignore-unfixed` in
+# the workflow already excludes the ones no upgrade exists for.
+
+vulnerabilities: []
+misconfigurations: []
+secrets: []
+licenses: []

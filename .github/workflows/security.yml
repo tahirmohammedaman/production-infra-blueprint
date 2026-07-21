@@ -1,0 +1,194 @@
+# Security gate.
+#
+# Every scanner here fails the build on a finding. None of them upload SARIF into a
+# dashboard: a result that lands in a security tab and merges anyway is reporting, not a
+# control, and this repository claims to have controls.
+#
+# Dependency CVEs are deliberately *not* scanned from the source tree. Trivy cannot resolve
+# a Gradle build script — pointed at this repository it reports "number of language-specific
+# files: 0" and exits green, which is worse than no scanner at all. Dependencies are scanned
+# where they actually exist: inside the built image, in build.yml, before it is signed. The
+# scheduled job below re-scans what is already published, which is the only way to find a
+# CVE disclosed after the last commit.
+
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Monday 05:00 UTC — new CVEs against code nobody has touched.
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  # Pinned so a scanner upgrade is a reviewed commit rather than a build that starts
+  # failing on a Tuesday for reasons nobody chose.
+  TRIVY_VERSION: v0.72.0
+  SEMGREP_VERSION: 1.170.0
+  CHECKOV_VERSION: 3.3.8
+
+jobs:
+  secrets:
+    name: secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The whole history, not just the tip. A credential committed in March and
+          # removed in April is still a credential anyone can `git show`, and rotating it
+          # is the only fix — knowing about it is the prerequisite.
+          fetch-depth: 0
+
+      # gitleaks-action is free for personal and public repositories; organisation-owned
+      # private repositories need GITLEAKS_LICENSE set as a secret.
+      - name: Scan history for credentials
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_SUMMARY: true
+
+  code:
+    name: code (semgrep)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Installed from PyPI at a pinned version rather than run as an action, so the
+      # version is visible in the diff and Renovate can propose the bump.
+      - name: Install semgrep
+        run: pipx install "semgrep==${SEMGREP_VERSION}"
+
+      # The community rulesets catch the generic classes of bug. .semgrep/ holds the rules
+      # specific to this codebase — invariants a reviewer would otherwise have to remember,
+      # three of which were defects here before they were rules.
+      - name: Scan
+        run: |
+          semgrep scan \
+            --config .semgrep \
+            --config p/java \
+            --config p/secrets \
+            --config p/dockerfile \
+            --error \
+            --metrics=off \
+            --exclude='**/build/**'
+
+  dockerfile:
+    name: dockerfile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Lint the Dockerfile
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
+        with:
+          dockerfile: services/Dockerfile
+          # warning, not error: hadolint's info-level rules are style opinions, but a
+          # warning here means an unpinned base or a missing USER, both of which matter.
+          failure-threshold: warning
+
+      # Trivy's config scanner reads the Dockerfile now and the Terraform and Kubernetes
+      # trees once they land. It does not understand Compose — that is checkov's job below.
+      - name: Scan build configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+          version: ${{ env.TRIVY_VERSION }}
+          trivyignores: .trivyignore.yaml
+          skip-dirs: '**/build'
+
+  config:
+    name: configuration (checkov)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install checkov
+        run: pipx install "checkov==${CHECKOV_VERSION}"
+
+      # Workflow permissions and image hardening now; the Terraform, Kubernetes and
+      # Kustomize trees once they land. It overlaps trivy on Dockerfiles and diverges
+      # everywhere else — two rule sets are cheap, a missed misconfiguration is not.
+      #
+      # Compose is not in this list because checkov has no docker_compose framework and
+      # trivy's config scanner does not read Compose either. The Compose stack's hardening
+      # is asserted by scripts/smoke-test.sh instead, which is a weaker control and is
+      # named as such in docs/security.md rather than papered over with a scanner that
+      # silently scans nothing.
+      #
+      # Suppressions live in .checkov.yaml, each with the reason attached.
+      - name: Scan configuration
+        run: |
+          checkov --directory . \
+            --framework dockerfile,github_actions,kubernetes,kustomize,terraform \
+            --quiet --compact
+
+  # The only job that finds CVEs nobody introduced. It scans the images that are actually
+  # published — the base layer included — so a vulnerability disclosed against Debian or the
+  # JDK after release surfaces on Monday morning rather than during an incident.
+  published-images:
+    name: published images
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan the published image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ghcr.io/${{ github.repository_owner }}/blueprint-${{ matrix.service }}:latest
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+          version: ${{ env.TRIVY_VERSION }}
+          trivyignores: .trivyignore.yaml
+
+  security:
+    name: security
+    runs-on: ubuntu-24.04
+    needs: [secrets, code, dockerfile, config, published-images]
+    if: always()
+    steps:
+      - name: Verify every scanner passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "scanner results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            # published-images is skipped outside the weekly schedule; nothing else here is.
+            if [[ "${result}" != "success" && "${result}" != "skipped" ]]; then
+              echo "::error::a security scanner reported '${result}'"
+              exit 1
+            fi
+          done
