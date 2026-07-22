@@ -41,6 +41,9 @@ repos:
     hooks:
       - id: shellcheck
         files: ^scripts/.*\.sh$
+        # Follow `source scripts/lib.sh`; without this the hook reports SC1091 on every
+        # script while CI, which passes the whole directory at once, reports nothing.
+        args: [--external-sources, --severity=style]
 
   - repo: https://github.com/antonbabenko/pre-commit-terraform
     rev: v1.99.0

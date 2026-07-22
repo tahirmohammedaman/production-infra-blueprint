@@ -121,7 +121,7 @@ jobs:
       - name: Lint shell scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=style --shell=bash scripts/*.sh
+          shellcheck --external-sources --severity=style --shell=bash scripts/*.sh
 
   test:
     name: test (${{ matrix.service }})
