@@ -75,6 +75,35 @@ runtime and compose implementation it found. Docker and rootless podman are both
 | Metrics / logs / traces | Prometheus + Alertmanager, Loki + Alloy, Tempo |
 | Dashboards | Grafana, provisioned as JSON |
 
+## Delivery pipeline
+
+Three workflows, each with a single required status check so branch protection does not
+have to track job names.
+
+| Workflow | Runs on | What it gates |
+| --- | --- | --- |
+| `ci.yml` | PR, main | Formatting, workflow and shell lint, tests against real Postgres/Redis/Kafka, per-service coverage thresholds |
+| `security.yml` | PR, main, weekly | Secret history, semgrep (community rules plus four written for this repository), hadolint, trivy config, checkov, and a weekly re-scan of the *published* images |
+| `build.yml` | PR, main, tags | PR: one architecture built, scanned and measured against a size budget. main: amd64 and arm64 built on native runners, joined into one manifest, scanned, then signed with cosign and attested with an SPDX SBOM and SLSA provenance |
+
+Two properties worth knowing about:
+
+- **A change to one service does not rebuild the other.** `platform` is shared, so touching
+  it fans back out to both — but a worker-only change never starts the API's test stack.
+- **Nothing is signed until it passes.** The image is pushed before it is scanned, because a
+  multi-arch manifest cannot be assembled otherwise. The gate is the signature: an image
+  that fails the scan is never signed, and admission requires one.
+
+```bash
+make verify-pins                                      # every action pinned to a commit SHA
+make verify-image IMAGE=ghcr.io/<owner>/blueprint-api:latest
+```
+
+`scripts/verify-image.sh` checks the signature against this repository's workflow identity
+specifically — `cosign verify` without `--certificate-identity` passes for anything signed
+by any GitHub Actions workflow anywhere, which looks like a control and is not one. See
+`docs/adr/0008-supply-chain-pinned-signed-and-attested.md`.
+
 ## What to look at first
 
 - **`docs/cost-analysis.md`** — every performance and footprint number in this repository,
@@ -86,6 +115,8 @@ runtime and compose implementation it found. Docker and rootless podman are both
 - **`services/api/src/main/java/dev/tahir/blueprint/outbox/`** — the transactional outbox,
   the reason a broker outage cannot corrupt state or take the API down.
 - **`scripts/smoke-test.sh`** — what "working" is defined as, in executable form.
+- **`.semgrep/blueprint.yml`** — four rules that encode invariants this system depends on.
+  Three of them were defects here before they were rules.
 
 ## Documentation
 

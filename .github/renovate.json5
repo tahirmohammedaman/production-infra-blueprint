@@ -1,0 +1,133 @@
+// Renovate keeps the pins current. Pinning without automated updates is how a repository
+// ends up with a two-year-old base image that is technically reproducible and full of CVEs
+// — the pin is only half of the control, and this file is the other half.
+//
+// JSON5 rather than JSON so the reasoning can live next to the rule it explains.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+
+  extends: [
+    'config:best-practices',
+    ':dependencyDashboard',
+    ':semanticCommits',
+    // Rewrites `uses: owner/action@v4` to a SHA with a `# v4` comment, which is exactly
+    // the shape scripts/check-action-pins.sh enforces.
+    'helpers:pinGitHubActionDigests',
+  ],
+
+  timezone: 'Africa/Addis_Ababa',
+  // Overnight, so a morning's work is never interrupted by a queue of update branches.
+  schedule: ['* 0-6 * * *'],
+  prConcurrentLimit: 4,
+  prHourlyLimit: 2,
+  rebaseWhen: 'conflicted',
+
+  // Commit messages must stay one-line conventional; the repository has no other format.
+  semanticCommitType: 'chore',
+  semanticCommitScope: 'deps',
+
+  // Security updates ignore the schedule and the concurrency limits. A known-exploited CVE
+  // does not wait for Tuesday night.
+  vulnerabilityAlerts: {
+    enabled: true,
+    schedule: null,
+    prPriority: 10,
+    labels: ['security'],
+  },
+
+  packageRules: [
+    {
+      description: 'Workflow actions land as a single ci(deps) PR rather than eleven',
+      matchManagers: ['github-actions'],
+      groupName: 'github actions',
+      semanticCommitType: 'ci',
+      semanticCommitScope: 'deps',
+    },
+    {
+      description: 'Spring Boot moves as one unit; a split BOM is not a supported combination',
+      matchPackageNames: [
+        'org.springframework.boot{/,}**',
+        'io.spring.dependency-management{/,}**',
+      ],
+      groupName: 'spring boot',
+      semanticCommitType: 'build',
+      semanticCommitScope: 'deps',
+    },
+    {
+      description: 'Test-only dependencies can move on their own; the suite is the check',
+      matchPackageNames: [
+        'org.testcontainers{/,}**',
+        'org.awaitility{/,}**',
+        'com.tngtech.archunit{/,}**',
+      ],
+      groupName: 'test tooling',
+      semanticCommitType: 'test',
+      semanticCommitScope: 'deps',
+    },
+    {
+      description: 'Base images are pinned by digest, so a digest-only change is still a rebuild',
+      matchDatasources: ['docker'],
+      pinDigests: true,
+      semanticCommitType: 'build',
+      semanticCommitScope: 'docker',
+    },
+    {
+      description: 'Major upgrades are read, not merged on a schedule',
+      matchUpdateTypes: ['major'],
+      dependencyDashboardApproval: true,
+    },
+  ],
+
+  customManagers: [
+    {
+      customType: 'regex',
+      description: 'Scanner versions pinned as workflow environment variables',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        'TRIVY_VERSION:\\s*(?<currentValue>v[\\d.]+)',
+      ],
+      depNameTemplate: 'aquasecurity/trivy',
+      datasourceTemplate: 'github-releases',
+    },
+    {
+      customType: 'regex',
+      description: 'Python-installed scanners pinned by version',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        'SEMGREP_VERSION:\\s*(?<currentValue>[\\d.]+)',
+      ],
+      depNameTemplate: 'semgrep',
+      datasourceTemplate: 'pypi',
+    },
+    {
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        'CHECKOV_VERSION:\\s*(?<currentValue>[\\d.]+)',
+      ],
+      depNameTemplate: 'checkov',
+      datasourceTemplate: 'pypi',
+    },
+    {
+      customType: 'regex',
+      description: 'The cosign release the installer action is asked for',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        'cosign-release:\\s*(?<currentValue>v[\\d.]+)',
+      ],
+      depNameTemplate: 'sigstore/cosign',
+      datasourceTemplate: 'github-releases',
+    },
+    {
+      customType: 'regex',
+      description: 'The actionlint image the workflow lint step runs',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        'rhysd/actionlint@(?<currentDigest>sha256:[a-f0-9]+)',
+      ],
+      depNameTemplate: 'rhysd/actionlint',
+      currentValueTemplate: '1.7.7',
+      datasourceTemplate: 'docker',
+    },
+  ],
+}

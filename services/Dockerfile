@@ -22,7 +22,12 @@
 #   --target cds               adds a class-data-sharing archive: ~25% faster startup,
 #                              ~88 MB larger. See docs/cost-analysis.md.
 
+# The `# renovate:` lines are what lets Renovate keep these current. Renovate reads image
+# references out of FROM instructions; it cannot see through `FROM ${JDK_IMAGE}` on its own,
+# and an unupdatable digest pin is a two-year-old base image with a straight face.
+# renovate: datasource=docker depName=eclipse-temurin versioning=docker
 ARG JDK_IMAGE=eclipse-temurin:21-jdk-noble@sha256:75ce56643243c3db632be2ef259625fb42ee3be1334389659f7a1a61acb78783
+# renovate: datasource=docker depName=gcr.io/distroless/java-base-debian12 versioning=docker
 ARG RUNTIME_IMAGE=gcr.io/distroless/java-base-debian12:nonroot@sha256:a9930cad62d02853d7f3dede7281c4b916cbf74493c2d8d38564121aad92bf6c
 
 # --------------------------------------------------------------------------- build

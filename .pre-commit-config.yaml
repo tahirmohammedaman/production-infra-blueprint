@@ -67,6 +67,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: action-pins
+        name: github actions pinned to commit SHAs
+        entry: scripts/check-action-pins.sh
+        language: system
+        files: ^\.github/(workflows|actions)/.*\.ya?ml$
+        pass_filenames: false
+
       - id: spotless
         name: spotless (java formatting)
         entry: bash -c 'cd services && ./gradlew --quiet spotlessCheck'

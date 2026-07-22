@@ -174,6 +174,23 @@ redis-cli: ## Open a redis-cli against the local cache
 psql: ## Open a psql shell against the local database
 	$(COMPOSE) -f $(COMPOSE_FILE) $(COMPOSE_OVERLAY) exec postgres psql -U $${DB_USER:-blueprint} -d $${DB_NAME:-blueprint}
 
+# ------------------------------------------------------------ supply chain / ci
+
+.PHONY: verify-pins
+verify-pins: ## Fail if any GitHub Action is referenced by tag instead of commit SHA
+	scripts/check-action-pins.sh
+
+.PHONY: verify-image
+verify-image: ## Verify a published image's signature, SBOM and provenance (IMAGE=...)
+	@test -n "$(IMAGE)" || { echo "usage: make verify-image IMAGE=ghcr.io/<owner>/blueprint-api:latest"; exit 1; }
+	scripts/verify-image.sh $(IMAGE)
+
+.PHONY: lint-ci
+lint-ci: ## Lint the workflow files and shell scripts the way CI does
+	$(CONTAINER) run --rm -v "$(PWD)":/repo:ro,z --workdir /repo \
+		rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color
+	scripts/check-action-pins.sh
+
 # ---------------------------------------------------------------- diagnostics
 
 .PHONY: version
