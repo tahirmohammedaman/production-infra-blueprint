@@ -29,3 +29,34 @@ skip-check:
   # `FROM ${JDK_IMAGE}` without substituting the ARG default and concludes the tag is
   # missing. Re-check this if the ARG indirection is ever removed.
   - CKV_DOCKER_7
+
+  # ---------------------------------------------------------------------------------
+  # The object store is Hetzner Object Storage. It is managed with the AWS provider because
+  # it speaks S3, which means every AWS S3 policy fires against it. The five below name AWS
+  # services that do not exist at this endpoint; the sixth is a deliberate cost decision.
+  # Each was verified against the finding, not skipped to get a green run.
+
+  # CKV2_AWS_6 — public access block. Hetzner returns 501 Not Implemented for
+  # PutPublicAccessBlock. Adding the resource does not harden the bucket, it breaks every
+  # apply. Buckets are private by default; access is granted with scoped credentials.
+  - CKV2_AWS_6
+
+  # CKV_AWS_145 — SSE-KMS with a customer-managed key. There is no KMS service at Hetzner.
+  # Encryption at rest is applied by the provider and is not configurable.
+  - CKV_AWS_145
+
+  # CKV2_AWS_62 — bucket event notifications. Requires SNS, SQS or Lambda. None exist here.
+  - CKV2_AWS_62
+
+  # CKV_AWS_18 — S3 server access logging. PutBucketLogging is not implemented at this
+  # endpoint. This is a genuine gap rather than a false positive: reads of the backup bucket
+  # are not audited, and the compensating control is that only two credentials can reach it.
+  # Recorded in docs/security.md rather than pretended away.
+  - CKV_AWS_18
+
+  # CKV_AWS_144 — cross-region replication. Deliberately not done. Replication doubles the
+  # storage line for a single-node system whose stated availability target does not include
+  # surviving the loss of a Hetzner region. The recovery story is base backup plus archived
+  # WAL, with a restore drill in docs/runbooks/. Buying replication instead would be paying
+  # for a guarantee the rest of the architecture does not make.
+  - CKV_AWS_144

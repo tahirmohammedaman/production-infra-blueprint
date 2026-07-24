@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars (gitignored) and fill in. Secrets are passed as environment
+# variables in practice - TF_VAR_hcloud_token and friends - so that a plan run in a shell
+# history or a CI log never contains them.
+
+admin_cidrs          = ["203.0.113.7/32"]
+admin_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"
+
+hostname           = "blueprint.example.com"
+cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
+
+object_storage_bucket = "blueprint-prod-data"
+
+# Defaults worth knowing about, shown here rather than hidden in variables.tf:
+# server_type           = "cax21"   # 4 ARM vCPU / 8 GB - sized from measured RSS
+# data_volume_size      = 20        # GB
+# log_retention_days    = 30
+# backup_retention_days = 14

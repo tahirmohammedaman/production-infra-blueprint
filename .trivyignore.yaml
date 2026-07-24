@@ -18,6 +18,39 @@
 # the workflow already excludes the ones no upgrade exists for.
 
 vulnerabilities: []
-misconfigurations: []
+
+misconfigurations:
+  # The object store is Hetzner Object Storage, managed with the AWS provider because it
+  # speaks S3. Trivy sees `aws_s3_bucket` and applies AWS policy, which is the right default
+  # and the wrong answer here: none of these four APIs exist at the endpoint. Hetzner returns
+  # 501 Not Implemented for PutPublicAccessBlock, so adding the resource does not harden the
+  # bucket — it breaks every apply. Buckets are private unless a policy says otherwise, and
+  # access is granted with scoped credentials.
+  #
+  # The expiry is a reminder to re-check whether Hetzner has implemented these since.
+  - id: AWS-0086
+    paths: ["infra/terraform/modules/storage/main.tf"]
+    statement: "Hetzner Object Storage returns 501 for PutPublicAccessBlock; buckets are private by default."
+    expired_at: 2027-01-31
+  - id: AWS-0087
+    paths: ["infra/terraform/modules/storage/main.tf"]
+    statement: "Hetzner Object Storage returns 501 for PutPublicAccessBlock; buckets are private by default."
+    expired_at: 2027-01-31
+  - id: AWS-0091
+    paths: ["infra/terraform/modules/storage/main.tf"]
+    statement: "Hetzner Object Storage returns 501 for PutPublicAccessBlock; buckets are private by default."
+    expired_at: 2027-01-31
+  - id: AWS-0093
+    paths: ["infra/terraform/modules/storage/main.tf"]
+    statement: "Hetzner Object Storage returns 501 for PutPublicAccessBlock; buckets are private by default."
+    expired_at: 2027-01-31
+
+  # There is no KMS at Hetzner, so there is no customer-managed key to encrypt with.
+  # Server-side encryption at rest is applied by the provider and is not configurable.
+  - id: AWS-0132
+    paths: ["infra/terraform/modules/storage/main.tf"]
+    statement: "No KMS service exists at this endpoint; SSE-KMS is not an option Hetzner offers."
+    expired_at: 2027-01-31
+
 secrets: []
 licenses: []

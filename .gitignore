@@ -14,6 +14,8 @@ age.key
 *.decrypted.yaml
 kubeconfig
 *.kubeconfig
+# Written by the Ansible k3s role; grants cluster-admin.
+infra/.kube/
 
 # Generated local secret material. The directory and its README are tracked; the
 # secret files themselves never are.
@@ -46,7 +48,11 @@ bin/
 
 # --- Terraform ---
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl is deliberately NOT ignored. It is the provider dependency lock -
+# the same role gradle/libs.versions.toml plays for Java - and a repository that claims
+# every input is pinned cannot leave provider resolution to whatever the registry serves
+# today. Generated for linux_amd64, linux_arm64 and darwin_arm64 with
+# `terraform providers lock -platform=...`.
 *.tfstate
 *.tfstate.*
 *.tfvars
