@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: blueprint
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # One extra pod up before an old one goes down. With maxUnavailable at 0 the rollout
+      # cannot reduce capacity even briefly, which is the actual mechanism behind the
+      # zero-downtime claim - readiness gating alone does not provide it.
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/part-of: blueprint
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      serviceAccountName: api
+      automountServiceAccountToken: false
+
+      # 25s of request draining in the application plus headroom for the JVM to close the
+      # connection pool. Shorter than the drain window turns a graceful shutdown into a
+      # SIGKILL, which is how a "zero-downtime" deploy drops requests.
+      terminationGracePeriodSeconds: 40
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The mounted secret is owned by this group so a uid outside the host's range can
+        # still read a 0440 file. Same problem as the Compose stack, different mechanism.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: api
+          image: ghcr.io/OWNER/blueprint-api:latest # overwritten per overlay; Flux updates the tag
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9090
+
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+            # Secrets are read from files, never from here. Every environment variable is
+            # inherited by child processes, visible in /proc, and captured in crash dumps.
+            - name: SPRING_CONFIG_IMPORT
+              value: optional:configtree:/run/secrets/
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://postgres:5432/blueprint
+            - name: SPRING_DATA_REDIS_HOST
+              value: redis
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            # Migrations are applied by a Job before this rolls; see migration/job.yaml.
+            - name: SPRING_FLYWAY_ENABLED
+              value: "false"
+
+          resources:
+            # Sized from measurement, not from a round number: 433 MB steady-state RSS under
+            # load (docs/cost-analysis.md). The request is what the scheduler reserves; the
+            # limit is where the kernel kills. MaxRAMPercentage=70 in the image derives the
+            # heap from the limit, so these two numbers are the only place memory is tuned.
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              # No CPU limit on purpose. CFS throttling on a JVM during start-up and GC
+              # produces latency spikes that look like application bugs; the request is what
+              # protects the node, and this node runs one tenant.
+              memory: 640Mi
+
+          # Three probes, three different questions.
+          startupProbe:
+            # A cold JVM takes ~5s to refresh its context, longer under a busy node. Without
+            # this the liveness probe would kill it mid-start and never let it finish.
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            # "Is this process wedged" - deliberately independent of every dependency.
+            # Restarting because Postgres is down adds a cold start to an incident.
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            # "Should this receive traffic" - gated on Postgres and Redis, never on Kafka.
+            # See docs/adr/0007-readiness-excludes-kafka.md.
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 3
+
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            # readOnlyRootFilesystem means the JVM needs somewhere real to write.
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: secrets
+          secret:
+            secretName: blueprint-app-secrets
+            # 0440 with the fsGroup above: readable by the container's group, by nothing
+            # else, and never world-readable inside the pod.
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,23 @@
+# SOPS encrypts the values of Kubernetes Secrets in place, leaving keys, kinds and metadata
+# readable. That is the whole point: a reviewer can see in a diff that a secret was rotated
+# and which one, without being able to read it, and Flux decrypts at apply time inside the
+# cluster.
+#
+# The age private key is not in this repository and never will be. It lives in the
+# operator's password manager and in one Kubernetes Secret (`sops-age` in flux-system),
+# which Flux uses to decrypt. Losing it means re-creating every secret, which is the correct
+# consequence — a key that can be recovered from the repository is not a key.
+#
+# One Kubernetes object per file. SOPS encrypts the first document of a multi-document YAML
+# file and silently drops the rest — a failure that looks exactly like a working commit
+# until the missing Secret is referenced at apply time.
+#
+# Rotate a secret:
+#   sops deploy/k8s/overlays/prod/app-secrets.enc.yaml   # edits decrypted, saves encrypted
+#   git commit -am "chore(sec): rotate the database password"
+# Flux applies it within a minute. Nothing else has to happen.
+
+creation_rules:
+  - path_regex: deploy/k8s/overlays/.*\.enc\.ya?ml$
+    encrypted_regex: '^(data|stringData)$'
+    age: age1rsaayan335t5l3l7fy86jelksjvfj6g607myyzx7dw8jjdahpu6q3vnklg

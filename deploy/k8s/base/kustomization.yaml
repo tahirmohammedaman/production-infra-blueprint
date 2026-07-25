@@ -1,0 +1,51 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: blueprint
+
+# Labels every resource, and — unlike `commonLabels` — does not add them to selectors.
+# Adding a label to a Deployment's selector is an immutable-field change: the apply fails
+# and the only fix is deleting the Deployment.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: blueprint
+      app.kubernetes.io/managed-by: flux
+
+# The Namespace and the migration Job are deliberately absent. Each is applied by its own
+# Flux Kustomization so that the three own disjoint sets of objects and can be ordered:
+# config (namespace + secrets) -> migrations (the Job) -> apps (everything here). Two Flux
+# Kustomizations applying the same object fight over ownership; the dependency chain only
+# works if nothing is claimed twice.
+resources:
+  - networkpolicy.yaml
+
+  - postgres/statefulset.yaml
+  - postgres/service.yaml
+
+  - redis/statefulset.yaml
+  - redis/service.yaml
+
+  - kafka/statefulset.yaml
+  - kafka/service.yaml
+  - kafka/topics-job.yaml
+
+  - api/serviceaccount.yaml
+  - api/deployment.yaml
+  - api/service.yaml
+  - api/ingress.yaml
+  - api/pdb.yaml
+  - api/hpa.yaml
+
+  - worker/serviceaccount.yaml
+  - worker/deployment.yaml
+  - worker/service.yaml
+
+# Image references are placeholders in the base and are set per overlay. Flux's image
+# automation rewrites the overlay, not this file, so a `kubectl apply -k base` never
+# accidentally deploys production tags.
+images:
+  - name: ghcr.io/OWNER/blueprint-api
+    newTag: latest
+  - name: ghcr.io/OWNER/blueprint-worker
+    newTag: latest

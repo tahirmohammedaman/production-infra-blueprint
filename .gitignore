@@ -70,3 +70,4 @@ tfplan.*
 node_modules/
 *.log
 tmp/
+.rendered/

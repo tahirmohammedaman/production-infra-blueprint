@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: blueprint
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: blueprint
+    spec:
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: redis
+          image: redis:7-alpine
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+          # No persistence. Everything in here is either a cache entry or a projection the
+          # reconciler rebuilds from Postgres within one interval, so an AOF or RDB file
+          # would be disk writes buying a recovery nobody needs. `--save ""` disables the
+          # default snapshotting the image otherwise turns on.
+          args:
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - 96mb
+            # allkeys-lru, not noeviction: this is a cache. Refusing writes when full would
+            # turn a full cache into a failing write path.
+            - --maxmemory-policy
+            - allkeys-lru
+
+          ports:
+            - name: redis
+              containerPort: 6379
+
+          resources:
+            # 7 MB measured; the limit is set by maxmemory above plus Redis' own overhead.
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 160Mi
+
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi

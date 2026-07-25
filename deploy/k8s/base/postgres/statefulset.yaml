@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: blueprint
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: blueprint
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+
+      securityContext:
+        # The upstream postgres image starts as root and drops to uid 999 itself, which the
+        # `restricted` Pod Security Standard forbids. Running as 999 from the start is what
+        # makes it admissible - and it is also why cap_drop ALL crashlooped this image in
+        # the Compose stack: it needed CAP_SETUID to do the drop itself.
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            # Not read-only: Postgres writes its socket, its lock file and its stats
+            # temp directory outside the data volume. The alternative is four more emptyDir
+            # mounts to satisfy a checkbox.
+            readOnlyRootFilesystem: false
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          env:
+            - name: POSTGRES_DB
+              value: blueprint
+            - name: POSTGRES_USER
+              value: blueprint
+            # _FILE, not the value. Same reason as everywhere else: an environment variable
+            # holding a password is visible to every child process and every crash dump.
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/secrets/postgres-password
+            # The data directory must be a subdirectory of the mount, not the mount itself:
+            # initdb refuses to run in a directory containing lost+found.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          resources:
+            # 29 MB measured on an empty schema; the request is what shared_buffers and the
+            # page cache will actually grow into under load.
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "blueprint", "-d", "blueprint"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "blueprint", "-d", "blueprint"]
+            periodSeconds: 5
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+
+      volumes:
+        - name: secrets
+          secret:
+            secretName: blueprint-postgres-credentials
+            defaultMode: 0440
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        # local-path, provisioned into /var/lib/rancher/k3s/storage - which the Ansible
+        # storage role mounts the Hetzner volume at, so this data survives a node rebuild.
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 8Gi

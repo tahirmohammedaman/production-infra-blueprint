@@ -1,0 +1,30 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: blueprint
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    # CPU, not memory. A JVM's RSS rises to fill the heap it was given and does not fall
+    # back, so a memory-based HPA scales up once and never scales down again.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # A JVM takes seconds to become useful. Scaling up fast is fine; the pod simply is
+      # not in rotation until its readiness probe passes.
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      # Slow on the way down. Scaling down during a lull and back up on the next request
+      # burst pays the cold-start cost repeatedly for no saving.
+      stabilizationWindowSeconds: 300

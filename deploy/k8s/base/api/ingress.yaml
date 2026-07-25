@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: blueprint
+  annotations:
+    # cert-manager issues and renews the certificate; Traefik terminates TLS with it.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - blueprint.example.com # replaced per overlay
+      secretName: blueprint-tls
+  rules:
+    - host: blueprint.example.com
+      http:
+        paths:
+          # Only the application paths are routed. /actuator is deliberately absent: the
+          # management port carries health detail, environment properties and a metrics
+          # endpoint that leaks internal structure, and none of it belongs on the internet.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /swagger-ui
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /v3/api-docs
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http

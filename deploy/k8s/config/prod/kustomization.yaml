@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: blueprint
+
+# Namespace and secrets: the objects everything else needs before it can start, and the only
+# ones that must not be touched by the Kustomization that rolls the application. Kept
+# separate so that a failed application deploy cannot prune the credentials underneath it.
+resources:
+  - ../../base/namespace
+  # Encrypted at rest in git; Flux decrypts at apply time with the age key held in the
+  # cluster. `kustomize build` here emits ciphertext, which is correct: a workstation that
+  # can render this directory still cannot read the passwords.
+  - app-secrets.enc.yaml
+  - postgres-secrets.enc.yaml

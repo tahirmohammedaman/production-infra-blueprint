@@ -1,0 +1,36 @@
+# The hostname is the one thing that genuinely differs between environments and cannot have
+# a sensible default. Everything else the base decides.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+spec:
+  tls:
+    - hosts:
+        - blueprint.tahir.dev
+      secretName: blueprint-tls
+  rules:
+    - host: blueprint.tahir.dev
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /swagger-ui
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /v3/api-docs
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http

@@ -1,0 +1,66 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# A separate namespace on the same cluster. A second cluster for a development environment
+# is the single largest avoidable line in a small hosting bill, and namespace isolation plus
+# the NetworkPolicies in the base is enough separation for what dev is actually for.
+namespace: blueprint-dev
+
+resources:
+  - ../../base
+  # Prod gets its Namespace from deploy/k8s/config/prod, applied by a separate Flux
+  # Kustomization. Dev has no such split - there are no encrypted secrets to order around -
+  # so it takes the Namespace straight from the base and kustomize renames it.
+  - ../../base/namespace
+  - ../../base/migration
+
+# Dev secrets are generated from literals rather than encrypted. They protect nothing —
+# the values are visible in this file — and the point is that dev needs no key material to
+# stand up. The generator's name suffix means changing a value rolls the pods that read it,
+# which is behaviour prod deliberately does not want mid-incident.
+secretGenerator:
+  - name: blueprint-app-secrets
+    literals:
+      - spring.datasource.password=dev-only-not-a-secret
+  - name: blueprint-postgres-credentials
+    literals:
+      - postgres-password=dev-only-not-a-secret
+
+images:
+  - name: ghcr.io/OWNER/blueprint-api
+    newName: ghcr.io/tahir/blueprint-api
+    newTag: main
+  - name: ghcr.io/OWNER/blueprint-worker
+    newName: ghcr.io/tahir/blueprint-worker
+    newTag: main
+
+patches:
+  - path: patch-scale-down.yaml
+    target:
+      kind: Deployment
+      name: api
+  - path: patch-ingress.yaml
+    target:
+      kind: Ingress
+      name: api
+  # Dev runs one API replica, so a PodDisruptionBudget requiring one available makes the
+  # node permanently undrainable — an upgrade hangs forever with no obvious cause.
+  - patch: |
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: api
+    target:
+      kind: PodDisruptionBudget
+      name: api
+  # Nothing load-tests dev, so an autoscaler here only ever fights the replica patch above.
+  - patch: |
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: api
+    target:
+      kind: HorizontalPodAutoscaler
+      name: api

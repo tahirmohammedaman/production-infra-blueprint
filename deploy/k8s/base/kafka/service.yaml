@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: blueprint
+spec:
+  # Headless, so kafka-0.kafka.blueprint.svc.cluster.local resolves to the pod directly.
+  # Kafka clients follow the advertised listener, and a ClusterIP would advertise an address
+  # that load-balances - which is meaningless for a broker and breaks the controller quorum.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+    - name: controller
+      port: 9093
+      targetPort: controller

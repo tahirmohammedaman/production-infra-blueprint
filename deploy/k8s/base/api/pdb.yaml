@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: blueprint
+spec:
+  # With two replicas this permits exactly one to be evicted at a time, so a node drain
+  # cannot take the service down. It is also the reason a single-replica overlay must not
+  # set this to minAvailable 1 - that would make the node undrainable forever.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api

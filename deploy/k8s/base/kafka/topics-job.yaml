@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: kafka-topics
+    app.kubernetes.io/part-of: blueprint
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-topics
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: topics
+          image: apache/kafka:4.0.0
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+
+          # Locally the application creates its topics on start-up, which is convenient and
+          # wrong in production: it needs cluster-wide create permission for something that
+          # should happen once, at deploy time, with partition counts and retention chosen
+          # deliberately. `--if-not-exists` makes this idempotent, so re-running it is a
+          # no-op rather than a failure.
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until /opt/kafka/bin/kafka-broker-api-versions.sh \
+                    --bootstrap-server kafka:9092 >/dev/null 2>&1; do
+                echo "waiting for the broker"
+                sleep 5
+              done
+
+              create() {
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+                  --create --if-not-exists --topic "$1" \
+                  --partitions "$2" --replication-factor 1 \
+                  --config retention.ms="$3"
+              }
+
+              # One partition. Ordering per aggregate is what the outbox relay's keying
+              # guarantees, and more partitions on a single broker buys parallelism the
+              # single worker replica cannot use.
+              create item-events 1 604800000
+
+              # The dead-letter topic keeps messages four times as long as the main one:
+              # a poison message is found by a human, and humans are slower than consumers.
+              create item-events.DLT 1 2419200000
+
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 384Mi
