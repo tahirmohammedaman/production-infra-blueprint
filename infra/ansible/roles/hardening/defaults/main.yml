@@ -1,0 +1,6 @@
+---
+# Networks allowed to reach the SSH port. This duplicates the Hetzner firewall on purpose:
+# the two controls fail independently, and a cloud firewall rule removed by a hurried
+# `terraform apply` should not leave the port open to the internet.
+hardening_ssh_allow_cidrs:
+  - 203.0.113.7/32

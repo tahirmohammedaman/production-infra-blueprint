@@ -1,0 +1,6 @@
+---
+# k3s' local-path provisioner writes PersistentVolumes here. Mounting the Hetzner volume at
+# this exact path is what makes Postgres data and Kafka log segments survive a node rebuild,
+# without teaching the cluster about a second storage class.
+storage_mount_path: /var/lib/rancher/k3s/storage
+storage_filesystem: ext4

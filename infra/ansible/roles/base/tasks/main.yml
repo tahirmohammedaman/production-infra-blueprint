@@ -1,0 +1,64 @@
+---
+- name: Set the timezone
+  community.general.timezone:
+    name: "{{ base_timezone }}"
+
+- name: Install the packages every later role assumes
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - jq
+      - unattended-upgrades
+      # Needed by the storage role to read filesystem UUIDs.
+      - util-linux
+      # A node with no swap OOM-kills the JVM before the JVM notices; a node with lots of
+      # swap thrashes instead. zram gives compressed in-memory swap, which on an 8 GB node
+      # absorbs a spike without touching the disk.
+      - systemd-zram-generator
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Configure compressed swap
+  ansible.builtin.copy:
+    dest: /etc/systemd/zram-generator.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible - infra/ansible/roles/base
+      [zram0]
+      zram-size = min(ram / 4, 2048)
+      compression-algorithm = zstd
+  notify: Restart zram
+
+- name: Cap journald so logs cannot fill the disk
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-limits.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible - infra/ansible/roles/base
+      [Journal]
+      SystemMaxUse={{ base_journal_max_use }}
+      MaxRetentionSec={{ base_journal_max_retention }}
+      Compress=yes
+  notify: Restart journald
+
+# Security patches apply themselves. On a single-node cluster there is nobody to page about
+# a Debian security advisory, and an unpatched node is a worse risk than an unplanned
+# restart of a workload that already has to survive restarts.
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/51-blueprint-unattended
+    mode: "0644"
+    content: |
+      // Managed by Ansible - infra/ansible/roles/base
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename},label=Debian-Security";
+      };
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      // Reboots happen in a window, not whenever a kernel lands mid-afternoon.
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:30";

@@ -1,0 +1,13 @@
+---
+# Pinned to a patch release, not to `stable`. An installer that resolves "stable" at run
+# time means re-running this playbook six months from now silently upgrades the cluster.
+k3s_version: v1.33.4+k3s1
+k3s_install_url: https://get.k3s.io
+
+# Traefik is disabled here and deployed through Flux instead. The bundled one is configured
+# by a HelmChartConfig that lives on the node rather than in git, which is the one place a
+# GitOps repository must not have a blind spot.
+k3s_disable_components:
+  - traefik
+
+k3s_kubeconfig_local_path: "{{ playbook_dir }}/../../.kube/blueprint-prod.yaml"

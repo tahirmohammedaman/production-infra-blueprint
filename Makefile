@@ -174,6 +174,40 @@ redis-cli: ## Open a redis-cli against the local cache
 psql: ## Open a psql shell against the local database
 	$(COMPOSE) -f $(COMPOSE_FILE) $(COMPOSE_OVERLAY) exec postgres psql -U $${DB_USER:-blueprint} -d $${DB_NAME:-blueprint}
 
+# --------------------------------------------------------------- infrastructure
+
+TF_DIR := infra/terraform/envs/prod
+ANSIBLE_DIR := infra/ansible
+
+.PHONY: tf-init
+tf-init: ## Initialise terraform (needs object storage credentials for the state backend)
+	cd $(TF_DIR) && terraform init
+
+.PHONY: tf-plan
+tf-plan: ## Show what terraform would change
+	cd $(TF_DIR) && terraform plan -out=tfplan
+
+.PHONY: tf-apply
+tf-apply: ## Apply a plan produced by tf-plan - never applies without reading one first
+	cd $(TF_DIR) && terraform apply tfplan
+
+.PHONY: tf-lint
+tf-lint: ## Format check and validate every terraform module
+	terraform fmt -recursive -check -diff infra/terraform
+	cd $(TF_DIR) && terraform init -backend=false -input=false >/dev/null && terraform validate
+
+.PHONY: provision
+provision: ## Run the ansible playbook against the node (BLUEPRINT_NODE_IP from tf output)
+	cd $(ANSIBLE_DIR) && ansible-playbook site.yml
+
+.PHONY: provision-check
+provision-check: ## Dry-run the playbook and show the diff
+	cd $(ANSIBLE_DIR) && ansible-playbook site.yml --check --diff
+
+.PHONY: ansible-lint
+ansible-lint: ## Lint the playbook at the production profile, as CI does
+	cd $(ANSIBLE_DIR) && ansible-lint --profile production site.yml roles/
+
 # ------------------------------------------------------------ supply chain / ci
 
 .PHONY: verify-pins

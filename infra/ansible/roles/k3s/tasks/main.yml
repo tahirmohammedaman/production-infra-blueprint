@@ -1,0 +1,120 @@
+---
+# The public NIC is not the one k3s should bind to. Derived rather than hardcoded, because
+# Hetzner's device naming has changed between image generations and a wrong guess here
+# produces a cluster that comes up and then cannot route pod traffic.
+- name: Find the interface holding the private address
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ip -o -4 addr show | awk -v want="{{ node_private_ip }}/" '$4 ~ "^"want {print $2; exit}'
+    executable: /bin/bash
+  register: k3s_private_iface
+  changed_when: false
+
+- name: Fail if the private interface could not be identified
+  ansible.builtin.assert:
+    that: k3s_private_iface.stdout | trim | length > 0
+    fail_msg: >-
+      No interface holds {{ node_private_ip }}. Check that hcloud_server's `network` block
+      applied and that the subnet exists.
+
+- name: Create the k3s server directory
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server
+    state: directory
+    mode: "0700"
+    owner: root
+    group: root
+
+# Written before the installer runs: k3s reads the policy at start-up and the API server
+# refuses to boot if the file named on the command line is missing.
+- name: Write the API audit policy
+  ansible.builtin.copy:
+    src: audit-policy.yaml
+    dest: /var/lib/rancher/k3s/server/audit-policy.yaml
+    mode: "0600"
+    owner: root
+    group: root
+  notify: Restart k3s
+
+- name: Read the installed k3s version
+  ansible.builtin.command:
+    cmd: k3s --version
+  register: k3s_installed
+  changed_when: false
+  failed_when: false
+
+# Downloaded to a file rather than piped into a shell. `curl | sh` gives the remote host
+# one chance to serve something different and leaves nothing on disk to inspect afterwards;
+# this way the script that ran is still there when someone asks what it did.
+- name: Fetch the k3s installer
+  ansible.builtin.get_url:
+    url: "{{ k3s_install_url }}"
+    dest: /usr/local/src/k3s-install.sh
+    mode: "0700"
+    owner: root
+    group: root
+  when: k3s_version not in (k3s_installed.stdout | default(''))
+
+# The installer is idempotent and also performs in-place upgrades, so one task covers both
+# first install and version bumps. Guarding on the version rather than on the binary's
+# existence is what makes changing k3s_version actually do something.
+- name: Install or upgrade k3s
+  ansible.builtin.command:
+    cmd: /usr/local/src/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: >-
+      server
+      --node-ip {{ node_private_ip }}
+      --advertise-address {{ node_private_ip }}
+      --flannel-iface {{ k3s_private_iface.stdout | trim }}
+      --bind-address {{ node_private_ip }}
+      --tls-san {{ cluster_hostname }}
+      --write-kubeconfig-mode 0600
+      --secrets-encryption
+      --protect-kernel-defaults
+      --disable {{ k3s_disable_components | join(' --disable ') }}
+      --kube-apiserver-arg=audit-policy-file=/var/lib/rancher/k3s/server/audit-policy.yaml
+      --kube-apiserver-arg=audit-log-path=/var/log/k3s-audit.log
+      --kube-apiserver-arg=audit-log-maxage=7
+      --kube-apiserver-arg=audit-log-maxbackup=3
+      --kube-apiserver-arg=audit-log-maxsize=64
+  when: k3s_version not in (k3s_installed.stdout | default(''))
+  changed_when: true
+
+- name: Wait for the API server to report ready
+  ansible.builtin.command:
+    cmd: k3s kubectl get --raw /readyz
+  register: k3s_readyz
+  until: k3s_readyz.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Read the generated kubeconfig
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: k3s_kubeconfig
+  no_log: true
+
+- name: Create the local kubeconfig directory
+  ansible.builtin.file:
+    path: "{{ k3s_kubeconfig_local_path | dirname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+# k3s writes 127.0.0.1 into the kubeconfig, which is right on the node and useless anywhere
+# else. Rewritten to the private address: reachable through an SSH tunnel and nowhere else,
+# which is why 6443 is absent from the cloud firewall's inbound rules.
+- name: Write a usable kubeconfig to the workstation
+  ansible.builtin.copy:
+    content: >-
+      {{ k3s_kubeconfig.content | b64decode | replace('127.0.0.1', node_private_ip) }}
+    dest: "{{ k3s_kubeconfig_local_path }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true

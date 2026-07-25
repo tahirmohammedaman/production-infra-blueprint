@@ -1,0 +1,31 @@
+# One playbook. Roles run in dependency order and the order is load-bearing:
+#
+#   base      installs what later roles assume exists
+#   hardening sets the sysctls k3s --protect-kernel-defaults refuses to start without
+#   storage   mounts the data volume at the path local-path will provision into, which must
+#             happen before k3s creates its first PersistentVolume on the root disk
+#   k3s       the cluster itself
+#
+# Everything after this point is Flux's job. Ansible does not install workloads: a playbook
+# that applies manifests is a second, weaker deployment mechanism competing with the one
+# that has drift detection.
+---
+- name: Provision the blueprint node
+  hosts: all
+  gather_facts: true
+
+  pre_tasks:
+    - name: Refuse to run against an unexpected distribution
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == "Debian"
+          - ansible_facts.distribution_major_version | int >= 12
+        fail_msg: >-
+          These roles assume Debian 12 or newer; package names and systemd unit names differ
+          elsewhere. Change the image in infra/terraform, not the assertion.
+
+  roles:
+    - base
+    - hardening
+    - storage
+    - k3s

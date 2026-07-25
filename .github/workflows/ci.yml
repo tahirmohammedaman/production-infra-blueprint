@@ -32,6 +32,10 @@ permissions:
 env:
   # Gradle's own daemon is pointless on an ephemeral runner and costs a JVM start.
   GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never
+  # Pinned for the same reason as everything else: a tool that upgrades itself turns a
+  # green pipeline red on a day nobody changed anything.
+  TERRAFORM_VERSION: 1.15.0
+  ANSIBLE_LINT_VERSION: 25.9.2
 
 jobs:
   changes:
@@ -42,6 +46,7 @@ jobs:
       services: ${{ steps.services.outputs.matrix }}
       workflows: ${{ steps.filter.outputs.workflows }}
       scripts: ${{ steps.filter.outputs.scripts }}
+      infra: ${{ steps.filter.outputs.infra }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -61,6 +66,8 @@ jobs:
               - 'services/api/**'
             worker:
               - 'services/worker/**'
+            infra:
+              - 'infra/**'
             workflows:
               - '.github/**'
             scripts:
@@ -122,6 +129,47 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck --external-sources --severity=style --shell=bash scripts/*.sh
+
+  # Terraform and Ansible get the same treatment as the application: a syntax error in a
+  # playbook is found here, not at 02:00 with half a node provisioned. `terraform validate`
+  # checks against the real provider schemas, so a renamed attribute after a provider bump
+  # fails a pull request instead of a plan.
+  infra:
+    name: infrastructure
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # The wrapper rewrites stdout to collect it for outputs, which mangles the diff
+          # `fmt -check` prints. Nothing here reads a step output.
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: terraform fmt -recursive -check -diff infra/terraform
+
+      # -backend=false: validating must not need credentials for the state bucket, and a
+      # pull request from a fork must never be able to touch state at all.
+      - name: Validate the production configuration
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Install ansible-lint
+        run: pipx install "ansible-lint==${ANSIBLE_LINT_VERSION}"
+
+      - name: Lint the playbook
+        working-directory: infra/ansible
+        run: |
+          ansible-galaxy collection install -r requirements.yml
+          # The production profile is the strict one: every task named, no bare shell where
+          # a module exists, no unprefixed role variables.
+          ansible-lint --profile production site.yml roles/
 
   test:
     name: test (${{ matrix.service }})
@@ -205,7 +253,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-24.04
-    needs: [changes, format, static, test]
+    needs: [changes, format, static, infra, test]
     if: always()
     steps:
       - name: Verify no upstream job failed

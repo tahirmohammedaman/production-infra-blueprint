@@ -1,0 +1,58 @@
+# Kubernetes API audit policy.
+#
+# Written to be readable rather than exhaustive. An audit log that records every GET from
+# every controller is 4 GB a day on a node with 20 GB of disk, and nobody reads it. This
+# records the things that would matter during an incident review — who changed what, and who
+# read a secret — and drops the rest at the source.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+
+# Never log the request body of a secret, even at Metadata level elsewhere in this file.
+omitStages:
+  - RequestReceived
+
+rules:
+  # Reading a Secret or a ServiceAccount token is the event most worth having six months
+  # from now. Metadata only: the body is the secret.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "serviceaccounts/token", "configmaps"]
+
+  # Anything that changes cluster state, with the submitted object recorded.
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+    resources:
+      - group: ""
+      - group: "apps"
+      - group: "batch"
+      - group: "networking.k8s.io"
+      - group: "rbac.authorization.k8s.io"
+
+  # Exec and port-forward are how a human gets a shell inside the cluster.
+  - level: Request
+    resources:
+      - group: ""
+        resources: ["pods/exec", "pods/attach", "pods/portforward"]
+
+  # Everything the control plane does to itself, all day, forever.
+  - level: None
+    users: ["system:kube-scheduler", "system:kube-controller-manager", "system:apiserver"]
+
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get", "list", "watch"]
+
+  - level: None
+    nonResourceURLs:
+      - /healthz*
+      - /readyz*
+      - /livez*
+      - /version
+      - /metrics
+
+  # Reads that reached none of the rules above are not worth the disk.
+  - level: None
+    verbs: ["get", "list", "watch"]
+
+  - level: Metadata

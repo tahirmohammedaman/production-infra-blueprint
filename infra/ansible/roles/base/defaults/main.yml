@@ -1,0 +1,6 @@
+---
+base_timezone: UTC
+# Journald on a small node will happily consume gigabytes and then the disk that Postgres
+# needed. Capped here; the real log store is Loki, and anything important is shipped there.
+base_journal_max_use: 200M
+base_journal_max_retention: 7day

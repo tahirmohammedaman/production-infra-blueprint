@@ -1,0 +1,7 @@
+---
+- name: Restart k3s
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: restarted
+  # Only meaningful once the service exists; on a first run the installer starts it anyway.
+  when: k3s_installed.stdout | default('') | length > 0

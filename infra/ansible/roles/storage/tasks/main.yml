@@ -1,0 +1,57 @@
+---
+- name: Confirm the data volume is attached
+  ansible.builtin.stat:
+    path: "{{ data_volume_device }}"
+    follow: true
+  register: storage_data_device
+
+- name: Fail early if the volume is missing
+  ansible.builtin.assert:
+    that: storage_data_device.stat.exists
+    fail_msg: >-
+      {{ data_volume_device }} is not present. Check `terraform output data_volume_device`
+      and that hcloud_volume_attachment applied - k3s must not start before this mount
+      exists, or local-path will create PersistentVolumes on the root disk instead and the
+      data will not survive a rebuild.
+
+# Terraform formats the volume on creation. Reformatting on every run would be a very
+# efficient way to delete the database, so this is guarded on there being no filesystem yet.
+- name: Read the current filesystem type
+  ansible.builtin.command:
+    cmd: "blkid -o value -s TYPE {{ data_volume_device }}"
+  register: storage_blkid_type
+  changed_when: false
+  failed_when: false
+
+- name: Create a filesystem only on a genuinely blank volume
+  community.general.filesystem:
+    fstype: "{{ storage_filesystem }}"
+    dev: "{{ data_volume_device }}"
+  when: storage_blkid_type.stdout | trim == ""
+
+- name: Create the mount point
+  ansible.builtin.file:
+    path: "{{ storage_mount_path }}"
+    state: directory
+    mode: "0700"
+    owner: root
+    group: root
+
+# Mounted by UUID. Hetzner's own automount writes an fstab entry keyed on a device path,
+# which changes when the volume is detached and reattached - the node then boots with the
+# database directory silently empty.
+- name: Read the filesystem UUID
+  ansible.builtin.command:
+    cmd: "blkid -o value -s UUID {{ data_volume_device }}"
+  register: storage_volume_uuid
+  changed_when: false
+
+- name: Mount the data volume
+  ansible.posix.mount:
+    path: "{{ storage_mount_path }}"
+    src: "UUID={{ storage_volume_uuid.stdout | trim }}"
+    fstype: "{{ storage_filesystem }}"
+    # discard keeps thin-provisioned block storage from growing forever; noatime removes a
+    # write per read, which matters for Kafka's segment files.
+    opts: defaults,noatime,discard,nofail
+    state: mounted

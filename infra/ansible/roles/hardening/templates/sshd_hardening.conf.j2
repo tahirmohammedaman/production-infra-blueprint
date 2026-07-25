@@ -1,0 +1,33 @@
+# Managed by Ansible - infra/ansible/roles/hardening
+#
+# cloud-init wrote a first-boot version of this before Ansible could connect. This file
+# supersedes it and is what stays true: cloud-init runs once, a playbook runs every time and
+# can be asserted.
+
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+
+# Agent and X11 forwarding are ways to reach further into a network from a compromised
+# session. Nothing here needs either.
+AllowAgentForwarding no
+AllowTcpForwarding yes
+X11Forwarding no
+
+# TCP forwarding stays on because it is how the Kubernetes API is reached: k3s binds 6443 to
+# the private interface only, and operators tunnel to it. That is the reason the API is not
+# in the cloud firewall's inbound rules at all.
+
+MaxAuthTries 3
+MaxSessions 4
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2
+
+{% for cidr in hardening_ssh_allow_cidrs %}
+Match Address {{ cidr }}
+    AllowUsers {{ ansible_user }}
+{% endfor %}
