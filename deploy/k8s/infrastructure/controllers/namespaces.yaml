@@ -1,0 +1,25 @@
+# Namespaces for things that are not the application. They exist here rather than in each
+# component's own directory because the NetworkPolicies in deploy/k8s/base select on
+# `kubernetes.io/metadata.name`, which the API server sets automatically — but only for
+# namespaces that exist before the policy is evaluated.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
+  labels:
+    app.kubernetes.io/part-of: blueprint-infrastructure
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    app.kubernetes.io/part-of: blueprint-infrastructure
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: blueprint-infrastructure

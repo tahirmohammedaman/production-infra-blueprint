@@ -1,0 +1,40 @@
+# Applied by a separate Flux Kustomization that depends on the controllers, because a
+# ClusterIssuer cannot be created until cert-manager's CRDs exist. Putting both in one
+# Kustomization produces a first reconcile that fails on a missing kind and then succeeds on
+# the retry — which works, looks broken, and trains people to ignore red.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: tahirmohammedaman@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      # http-01, not dns-01. It needs no API credential for the DNS provider, which is one
+      # fewer secret in the cluster, and it is why the Cloudflare records in Terraform are
+      # unproxied: a proxied record answers the challenge at the edge and the certificate
+      # never issues.
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+# The staging issuer exists so that a broken ingress or a DNS mistake is debugged against
+# Let's Encrypt's staging endpoint. Production has a rate limit of five duplicate
+# certificates per week, and hitting it means no certificate for seven days.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: tahirmohammedaman@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

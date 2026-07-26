@@ -72,6 +72,8 @@ runtime and compose implementation it found. Docker and rootless podman are both
 | Orchestration | k3s, Kustomize (base + overlays) |
 | Provisioning | Terraform (Hetzner Cloud), Ansible |
 | Delivery | GitHub Actions (build, scan, sign) → Flux v2 (reconcile) |
+| Certificates | cert-manager + Let's Encrypt (http-01) |
+| Secrets | SOPS + age, encrypted in git, decrypted in-cluster |
 | Metrics / logs / traces | Prometheus + Alertmanager, Loki + Alloy, Tempo |
 | Dashboards | Grafana, provisioned as JSON |
 
@@ -103,6 +105,41 @@ make verify-image IMAGE=ghcr.io/<owner>/blueprint-api:latest
 specifically — `cosign verify` without `--certificate-identity` passes for anything signed
 by any GitHub Actions workflow anywhere, which looks like a control and is not one. See
 `docs/adr/0008-supply-chain-pinned-signed-and-attested.md`.
+
+## Deployment
+
+CI never touches the cluster. Its last act is publishing a signed image; Flux, running
+inside the cluster, pulls from this repository and reconciles. No kubeconfig and no cloud
+credential exists in any workflow.
+
+```
+deploy/k8s/     kustomize: base, config, migrations, prod and dev overlays, infrastructure
+clusters/prod/  what Flux reconciles, and in what order
+infra/terraform hcloud: node, network, firewall, volume, object storage, DNS
+infra/ansible   node hardening and the k3s bootstrap
+```
+
+Reconciliation order is data, not a deploy script:
+
+```
+infrastructure-controllers → infrastructure-configs → apps-config → apps-migrations → apps
+   Traefik, cert-manager       ACME issuers            ns+secrets     Flyway Job        rollout
+```
+
+Each stage waits for the previous one to be *healthy*, not merely applied. The migration Job
+is its own stage so the rollout cannot begin until the schema change has finished — which is
+what makes an expand/contract deploy safe rather than optimistic.
+
+Secrets are SOPS-encrypted in git and decrypted by Flux inside the cluster; the age private
+key is not in this repository. Image tags are rewritten by Flux's image automation and
+committed, so the repository always describes what is actually running.
+
+```bash
+make tf-plan          # what terraform would change
+make provision-check  # what ansible would change
+make k8s-validate     # render every kustomization, check against the real schemas
+make flux-status      # what the cluster thinks it is running
+```
 
 ## What to look at first
 

@@ -1,0 +1,41 @@
+# What Flux reconciles before the application exists.
+#
+# Two Kustomizations rather than one, and the dependency between them is the point:
+# `infrastructure-configs` contains a ClusterIssuer, which is a cert-manager CRD. Applying
+# it before cert-manager is installed fails on an unknown kind. Flux would retry and
+# eventually succeed, which is worse than failing — a pipeline that is red for the first
+# two minutes of every bootstrap teaches people that red means nothing.
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-controllers
+  namespace: flux-system
+spec:
+  interval: 1h
+  retryInterval: 2m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./deploy/k8s/infrastructure/controllers
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-configs
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infrastructure-controllers
+  interval: 1h
+  retryInterval: 2m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./deploy/k8s/infrastructure/configs
+  prune: true
+  wait: true

@@ -9,6 +9,12 @@ compact: true
 skip-path:
   - services/.*/build/.*
   - .*/\.gradle/.*
+  # Kustomize patch fragments are not standalone manifests. Checkov reads
+  # `patch-scale-down.yaml` as a complete Deployment in the `default` namespace with no
+  # securityContext, no probes and no resources, and reports seventeen findings that the
+  # rendered output does not have. The rendered output is what CI validates, in the
+  # `manifests` job of .github/workflows/ci.yml.
+  - deploy/k8s/overlays/.*/patch-.*\.yaml
 
 skip-check:
   # CKV_DOCKER_2 — "ensure a HEALTHCHECK instruction is added".
@@ -60,3 +66,37 @@ skip-check:
   # WAL, with a restore drill in docs/runbooks/. Buying replication instead would be paying
   # for a guarantee the rest of the architecture does not make.
   - CKV_AWS_144
+
+  # ---------------------------------------------------------------------------------
+  # Kubernetes. Each of these is a deliberate decision recorded in deploy/k8s/README.md,
+  # not an oversight — and each was checked against the finding before being skipped.
+
+  # CKV_K8S_11 — CPU limits. Deliberately absent. CFS throttling on a JVM during start-up
+  # and garbage collection produces latency spikes indistinguishable from application bugs.
+  # CPU *requests* are set on every container, which is what protects the node; this node
+  # runs one tenant, so there is nothing to protect it from.
+  - CKV_K8S_11
+
+  # CKV_K8S_14 / CKV_K8S_43 — image tag and digest. The base carries `latest` as a
+  # placeholder on purpose, so `kubectl apply -k base` cannot deploy production. The prod
+  # overlay carries an immutable `<timestamp>-<sha>` tag that Flux's image automation writes
+  # and commits. Integrity comes from the cosign signature the cluster's admission policy
+  # requires (see ADR 0008), not from a digest pasted into a manifest a bot has to rewrite.
+  - CKV_K8S_14
+  - CKV_K8S_43
+
+  # CKV_K8S_15 — imagePullPolicy: Always. Wrong for immutable tags: every pod start becomes
+  # a registry round trip for an image that cannot have changed, and a registry outage
+  # becomes an outage here. IfNotPresent is correct precisely because the tags are unique.
+  - CKV_K8S_15
+
+  # CKV_K8S_22 — read-only root filesystem. Set on every container this repository builds.
+  # Not set on postgres, kafka and the kafka-topics Job: upstream images write sockets, lock
+  # files and stats directories outside their data volumes, and satisfying the check would
+  # mean four more emptyDir mounts per pod to make a box tick.
+  - CKV_K8S_22
+
+  # CKV_K8S_40 — UID above 10000. Our own images run as 65532. The stock postgres, redis and
+  # kafka images have their uid compiled into file ownership inside the image (999, 999,
+  # 1000); overriding it makes the container start and then fail on its own data directory.
+  - CKV_K8S_40

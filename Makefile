@@ -208,6 +208,50 @@ provision-check: ## Dry-run the playbook and show the diff
 ansible-lint: ## Lint the playbook at the production profile, as CI does
 	cd $(ANSIBLE_DIR) && ansible-lint --profile production site.yml roles/
 
+# ------------------------------------------------------------------ kubernetes
+
+KUSTOMIZATIONS := \
+	deploy/k8s/base \
+	deploy/k8s/config/prod \
+	deploy/k8s/migrations/prod \
+	deploy/k8s/overlays/prod \
+	deploy/k8s/overlays/dev \
+	deploy/k8s/infrastructure/controllers \
+	deploy/k8s/infrastructure/configs
+
+KUSTOMIZE_IMAGE  := registry.k8s.io/kustomize/kustomize@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429
+KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform@sha256:5103f6f5e89061728aad4ad5a250627dd0fc9b2a92eb876f3762677a4222f9e0
+KUBERNETES_VERSION ?= 1.33.0
+
+.PHONY: k8s-build
+k8s-build: ## Render every kustomization to stdout
+	@for path in $(KUSTOMIZATIONS); do \
+		echo "--- $$path"; \
+		$(CONTAINER) run --rm -v "$(PWD)":/k:ro,z $(KUSTOMIZE_IMAGE) build "/k/$$path"; \
+	done
+
+.PHONY: k8s-validate
+k8s-validate: ## Render every kustomization and check it against the Kubernetes schemas
+	@rm -rf .rendered && mkdir -p .rendered
+	@for path in $(KUSTOMIZATIONS); do \
+		$(CONTAINER) run --rm -v "$(PWD)":/k:ro,z $(KUSTOMIZE_IMAGE) build "/k/$$path" \
+			> ".rendered/$$(echo $$path | tr / -).yaml"; \
+	done
+	@cp clusters/prod/*.yaml .rendered/
+	$(CONTAINER) run --rm -v "$(PWD)/.rendered":/w:ro,z $(KUBECONFORM_IMAGE) \
+		-strict -summary -kubernetes-version $(KUBERNETES_VERSION) \
+		-ignore-missing-schemas -skip Secret /w
+	@rm -rf .rendered
+
+.PHONY: secrets-edit
+secrets-edit: ## Edit a SOPS-encrypted secret in place (FILE=deploy/k8s/config/prod/app-secrets.enc.yaml)
+	@test -n "$(FILE)" || { echo "usage: make secrets-edit FILE=<path to a .enc.yaml>"; exit 1; }
+	sops $(FILE)
+
+.PHONY: flux-status
+flux-status: ## Show what Flux is reconciling and whether it is healthy
+	flux get all --all-namespaces
+
 # ------------------------------------------------------------ supply chain / ci
 
 .PHONY: verify-pins

@@ -1,0 +1,96 @@
+# Image automation: Flux watches GHCR, picks the newest tag that matches the policy, writes
+# it into the prod overlay, and commits.
+#
+# This is the half of GitOps that people skip, and skipping it means the repository stops
+# describing what is running the moment someone runs `kubectl set image` during an incident.
+# With this, the only way to change what runs is a commit — including Flux's own.
+#
+# The policy sorts on a timestamp prefix rather than on semver, because most deploys here
+# are pushes to main and never get a version tag. build.yml emits `<YYYYMMDDHHmmss>-<sha>`
+# on the default branch specifically so there is something orderable to sort on: `latest`
+# and `sha-...` are not orderable, and an ImagePolicy over unorderable tags silently picks
+# the wrong one.
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: blueprint-api
+  namespace: flux-system
+spec:
+  image: ghcr.io/tahir/blueprint-api
+  interval: 5m
+  secretRef:
+    name: ghcr-credentials
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: blueprint-worker
+  namespace: flux-system
+spec:
+  image: ghcr.io/tahir/blueprint-worker
+  interval: 5m
+  secretRef:
+    name: ghcr-credentials
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: blueprint-api
+  namespace: flux-system
+spec:
+  imageRepositoryRef:
+    name: blueprint-api
+  filterTags:
+    pattern: '^(?P<ts>[0-9]{14})-(?P<sha>[0-9a-f]+)$'
+    extract: '$ts'
+  policy:
+    alphabetical:
+      order: asc
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: blueprint-worker
+  namespace: flux-system
+spec:
+  imageRepositoryRef:
+    name: blueprint-worker
+  filterTags:
+    pattern: '^(?P<ts>[0-9]{14})-(?P<sha>[0-9a-f]+)$'
+    extract: '$ts'
+  policy:
+    alphabetical:
+      order: asc
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta1
+kind: ImageUpdateAutomation
+metadata:
+  name: blueprint
+  namespace: flux-system
+spec:
+  interval: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      author:
+        name: flux
+        email: flux@users.noreply.github.com
+      # One line, conventional, same as every other commit in this repository. A bot that
+      # writes differently from the humans makes `git log` unreadable.
+      messageTemplate: 'chore(deploy): update {{ range .Changed.Changes }}{{ .OldValue }} to {{ .NewValue }}{{ end }}'
+    push:
+      branch: main
+  update:
+    # Both the prod overlay and the migration Kustomization, because the Job runs the same
+    # image as the API and must move with it. The Setters strategy only rewrites lines
+    # carrying a `# {"$imagepolicy": ...}` marker, so widening the path costs nothing: the
+    # base keeps its placeholder names and `kubectl apply -k base` can never deploy a
+    # production tag by accident.
+    path: ./deploy/k8s
+    strategy: Setters

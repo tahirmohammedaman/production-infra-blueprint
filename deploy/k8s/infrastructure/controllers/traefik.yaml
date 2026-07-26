@@ -1,0 +1,95 @@
+# Traefik, deployed from git rather than from k3s' bundled manifest.
+#
+# k3s ships Traefik and configures it with a HelmChartConfig written onto the node's
+# filesystem. That is a piece of production configuration living somewhere no diff can see
+# it, which is exactly the blind spot a GitOps repository must not have — so the Ansible
+# role disables the bundled one and this replaces it.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: traefik
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://traefik.github.io/charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: traefik
+      # Pinned to a minor range, not to `*`. Renovate proposes the bump; a chart that
+      # resolves at reconcile time means the gateway can change while nobody is looking.
+      version: "37.x"
+      sourceRef:
+        kind: HelmRepository
+        name: traefik
+        namespace: flux-system
+  install:
+    crds: Create
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      # Roll back automatically if the upgrade does not become healthy. The gateway is the
+      # one component whose failure takes everything else with it.
+      retries: 3
+      remediateLastFailure: true
+  values:
+    deployment:
+      replicas: 1
+    service:
+      type: LoadBalancer
+    ports:
+      web:
+        redirections:
+          entryPoint:
+            to: websecure
+            scheme: https
+            permanent: true
+      websecure:
+        tls:
+          enabled: true
+    # The dashboard is off. It is unauthenticated by default, exposes every route and
+    # middleware, and is not worth the ingress rule.
+    ingressRoute:
+      dashboard:
+        enabled: false
+    logs:
+      general:
+        format: json
+      access:
+        enabled: true
+        format: json
+        # Health checks and metrics scrapes are the majority of requests by count and none
+        # of them are interesting. Dropping them at the source is cheaper than paying Loki
+        # to store them and then filtering at query time.
+        filters:
+          statusCodes: "200-299,400-599"
+        fields:
+          names:
+            StartUTC: drop
+    metrics:
+      prometheus:
+        entryPoint: metrics
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      capabilities:
+        drop: [ALL]
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false

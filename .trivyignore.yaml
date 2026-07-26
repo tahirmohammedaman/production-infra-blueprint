@@ -52,5 +52,30 @@ misconfigurations:
     statement: "No KMS service exists at this endpoint; SSE-KMS is not an option Hetzner offers."
     expired_at: 2027-01-31
 
+  # KSV-0014 — read-only root filesystem. Set on every container built by this repository.
+  # The three below are stock upstream images that write sockets, lock files and stats
+  # directories outside their data volumes; making them read-only means four more emptyDir
+  # mounts each to satisfy a check rather than to gain anything.
+  - id: KSV-0014
+    paths:
+      - "deploy/k8s/base/postgres/statefulset.yaml"
+      - "deploy/k8s/base/kafka/statefulset.yaml"
+      - "deploy/k8s/base/kafka/topics-job.yaml"
+    statement: "Upstream images write outside their data volume; our own images all set readOnlyRootFilesystem."
+    expired_at: 2027-01-31
+
+  # KSV-0014 / KSV-0118 on a kustomize patch fragment. patch-scale-down.yaml is not a
+  # manifest — it is a strategic-merge patch that adjusts two resource numbers, and it has no
+  # securityContext because the base it patches already has one. Trivy reads it as a
+  # standalone Deployment. The rendered output is what CI validates, in the `manifests` job.
+  - id: KSV-0014
+    paths: ["deploy/k8s/overlays/dev/patch-scale-down.yaml"]
+    statement: "Kustomize patch fragment, not a complete manifest; the rendered Deployment sets this."
+    expired_at: 2027-01-31
+  - id: KSV-0118
+    paths: ["deploy/k8s/overlays/dev/patch-scale-down.yaml"]
+    statement: "Kustomize patch fragment, not a complete manifest; the rendered Deployment sets this."
+    expired_at: 2027-01-31
+
 secrets: []
 licenses: []

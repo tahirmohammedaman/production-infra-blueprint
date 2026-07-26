@@ -36,6 +36,9 @@ env:
   # green pipeline red on a day nobody changed anything.
   TERRAFORM_VERSION: 1.15.0
   ANSIBLE_LINT_VERSION: 25.9.2
+  # The version k3s pins in infra/ansible/roles/k3s/defaults/main.yml. Validating against a
+  # different one is validating against a cluster that does not exist.
+  KUBERNETES_VERSION: 1.33.0
 
 jobs:
   changes:
@@ -47,6 +50,7 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
       scripts: ${{ steps.filter.outputs.scripts }}
       infra: ${{ steps.filter.outputs.infra }}
+      manifests: ${{ steps.filter.outputs.manifests }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -68,6 +72,10 @@ jobs:
               - 'services/worker/**'
             infra:
               - 'infra/**'
+            manifests:
+              - 'deploy/k8s/**'
+              - 'clusters/**'
+              - '.sops.yaml'
             workflows:
               - '.github/**'
             scripts:
@@ -171,6 +179,43 @@ jobs:
           # a module exists, no unprefixed role variables.
           ansible-lint --profile production site.yml roles/
 
+  # Every kustomization is rendered and every rendered object is checked against the real
+  # Kubernetes schemas. A typo in a Deployment is otherwise found by Flux, in the cluster,
+  # as a failed reconciliation nobody is watching at the time.
+  manifests:
+    name: manifests
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.manifests == 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Render and validate
+        run: |
+          set -euo pipefail
+          mkdir -p rendered
+
+          # Digest-pinned, like every other tool this pipeline runs.
+          kustomize() {
+            docker run --rm -v "${PWD}:/k:ro"               registry.k8s.io/kustomize/kustomize@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429               build "/k/$1"
+          }
+
+          for path in deploy/k8s/base                       deploy/k8s/config/prod                       deploy/k8s/migrations/prod                       deploy/k8s/overlays/prod                       deploy/k8s/overlays/dev                       deploy/k8s/infrastructure/controllers                       deploy/k8s/infrastructure/configs; do
+            echo "::group::${path}"
+            kustomize "${path}" | tee "rendered/${path//\//-}.yaml" | head -1 >/dev/null
+            echo "::endgroup::"
+          done
+
+          # Flux's own manifests are not produced by kustomize; validate them as they are.
+          cp clusters/prod/*.yaml rendered/
+
+          # -skip Secret: the SOPS-encrypted Secrets carry a `sops:` block that strict
+          #   validation rejects. Flux strips it at decryption time, so the object the API
+          #   server sees is valid; validating the ciphertext form is not.
+          # -ignore-missing-schemas: HelmRelease, ClusterIssuer and the Flux kinds are CRDs
+          #   with no published JSON schema. Everything with a schema is still strict.
+          docker run --rm -v "${PWD}/rendered:/w:ro"             ghcr.io/yannh/kubeconform@sha256:5103f6f5e89061728aad4ad5a250627dd0fc9b2a92eb876f3762677a4222f9e0             -strict -summary -kubernetes-version "${KUBERNETES_VERSION}"             -ignore-missing-schemas -skip Secret /w
+
   test:
     name: test (${{ matrix.service }})
     runs-on: ubuntu-24.04
@@ -253,7 +298,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-24.04
-    needs: [changes, format, static, infra, test]
+    needs: [changes, format, static, infra, manifests, test]
     if: always()
     steps:
       - name: Verify no upstream job failed

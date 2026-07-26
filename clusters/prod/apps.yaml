@@ -1,0 +1,115 @@
+# The application itself.
+#
+# Ordering, expressed as data rather than as a deploy script:
+#
+#   infrastructure-configs   ingress class and certificate issuer must exist
+#     └── apps-config        namespace and decrypted secrets
+#           └── apps-migrations   schema is expanded before any new code runs against it
+#                 └── apps        the Deployments roll only after the Job succeeded
+#
+# Each Kustomization owns a disjoint set of objects. That is not tidiness: two Flux
+# Kustomizations applying the same resource fight over ownership, and the dependency chain
+# only holds if nothing is claimed twice. It is also why the secrets are in their own unit —
+# a failed application deploy must not be able to prune the credentials out from under the
+# database.
+#
+# The Job is separate specifically so `wait: true` can block on it. Inside one
+# Kustomization, Flux applies the Job and the Deployments together and the new pods race
+# the schema change.
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-config
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infrastructure-controllers
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./deploy/k8s/config/prod
+  prune: true
+  wait: true
+
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-migrations
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: apps-config
+    - name: infrastructure-configs
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./deploy/k8s/migrations/prod
+  prune: true
+  wait: true
+
+  healthChecks:
+    - apiVersion: batch/v1
+      kind: Job
+      name: migrate
+      namespace: blueprint
+
+  # Jobs are immutable. When the image tag changes the Job's pod template changes with it,
+  # and a plain apply fails with "field is immutable" forever. force recreates it, which is
+  # the correct behaviour for a run-once object.
+  force: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: apps-migrations
+  interval: 10m
+  retryInterval: 1m
+  timeout: 15m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./deploy/k8s/overlays/prod
+  prune: true
+  wait: true
+
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+
+  # `wait: true` alone only waits for the objects to be applied. These make Flux wait for
+  # the rollouts to actually become healthy, which is what turns a bad deploy into a failed
+  # reconciliation instead of a running cluster full of CrashLoopBackOff.
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: api
+      namespace: blueprint
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: worker
+      namespace: blueprint
+    - apiVersion: apps/v1
+      kind: StatefulSet
+      name: postgres
+      namespace: blueprint
+    - apiVersion: apps/v1
+      kind: StatefulSet
+      name: kafka
+      namespace: blueprint

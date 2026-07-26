@@ -276,6 +276,13 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
+            # Sortable, and the only tag here that is. Flux's ImagePolicy has to decide
+            # which of two tags is newer, and it can do that alphabetically or by semver —
+            # `latest`, `main` and `sha-abc123` are neither. Most deploys are pushes to main
+            # and never get a version tag, so without this the image automation would have
+            # nothing to order on and would quietly pick the wrong image.
+            # See clusters/prod/image-automation.yaml.
+            type=raw,value={{date 'YYYYMMDDHHmmss'}}-{{sha}},enable={{is_default_branch}}
 
       - name: Join the per-architecture images into one manifest
         id: manifest
