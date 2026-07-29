@@ -26,6 +26,19 @@ x-observability: &observability
     - /tmp:size=32m
 
 services:
+  # Trace export is switched on here, next to Tempo, rather than in the base file. Left on
+  # without a receiver the exporter logs an ERROR every few seconds, and a log full of
+  # ignorable errors teaches everyone to ignore ERROR.
+  api:
+    environment:
+      OTLP_EXPORT_ENABLED: "true"
+
+  worker:
+    environment:
+      OTLP_EXPORT_ENABLED: "true"
+      # Every trace locally; production samples 10% (application.yml).
+      TRACE_SAMPLE_RATE: "1.0"
+
   # ------------------------------------------------------------------- metrics
   prometheus:
     image: docker.io/prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
@@ -73,6 +86,60 @@ services:
       retries: 6
     mem_limit: 64m
 
+  # ---------------------------------------------------------------------- logs
+  loki:
+    image: docker.io/grafana/loki:3.7.4@sha256:87f0a067673756a3cede1bcbf0c74875f7df9b09fddb53e399d0c576f756cfcc
+    <<: *observability
+    command:
+      - -config.file=/etc/loki/loki.yml
+    volumes:
+      - ../../observability/loki/loki.yml:/etc/loki/loki.yml:ro,z
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    mem_limit: 256m
+
+  alloy:
+    image: docker.io/grafana/alloy:v1.18.0@sha256:491b0578c04983fd54fe99b587b6fab4404dc46d0dc16677bd6b00cc1140b308
+    <<: *observability
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      # Not the image's own /var/lib/alloy/data. That directory belongs to the image's `alloy`
+      # user with mode 0770, while Alloy runs here as root — the only user that can open the
+      # runtime socket, rootless or not — and root without CAP_DAC_OVERRIDE, which cap_drop
+      # removes, cannot enter another user's directory. Alloy crashlooped on "mkdir: permission
+      # denied". A volume at a path the image lacks is created owned by the container's user.
+      - --storage.path=/var/lib/alloy-state
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    volumes:
+      - ../../observability/alloy:/etc/alloy:ro,z
+      # Read-only for the same reason as the gateway's: an agent with write access to the
+      # container runtime is root on the host.
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy-state
+    depends_on:
+      loki:
+        condition: service_started
+    mem_limit: 192m
+
+  # -------------------------------------------------------------------- traces
+  tempo:
+    image: docker.io/grafana/tempo:2.10.7@sha256:032b3acb51ed02c4b801473d54bb63e9e9f13738d215126d9843c30283794f4b
+    <<: *observability
+    command:
+      - -config.file=/etc/tempo/tempo.yml
+    volumes:
+      - ../../observability/tempo/tempo.yml:/etc/tempo/tempo.yml:ro,z
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    mem_limit: 256m
+
 volumes:
   prometheus-data:
   alertmanager-data:
+  loki-data:
+  alloy-data:
+  tempo-data:

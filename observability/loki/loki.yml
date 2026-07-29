@@ -1,0 +1,66 @@
+# Loki for the local stack: single binary, filesystem storage, three days of retention.
+# Production runs the same limits against object storage; see
+# deploy/k8s/infrastructure/observability/loki.yaml.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    - from: "2026-07-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 72h
+
+  # The label budget, enforced at ingestion. Streams carry exactly env, service_name, level
+  # and — in the cluster — namespace. Everything with more than a handful of values (trace
+  # id, request id, pod name) travels as structured metadata instead, which is queryable but
+  # does not create a stream per value. A stream per trace id is how a Loki bill turns into
+  # an Elasticsearch bill.
+  #
+  # A fifth label is rejected with HTTP 400 at push time. Alloy counts the drop, and the
+  # LogPipelineDropping alert fires on it, so the budget cannot be exceeded by accident.
+  max_label_names_per_series: 4
+  allow_structured_metadata: true
+
+  # Loki 3 invents a service_name label when a stream has none, and a detected_level
+  # structured-metadata field from the log text. Alloy already sets both explicitly; letting
+  # Loki guess as well gives two sources of truth that disagree on unparsed lines.
+  discover_service_name: []
+  discover_log_levels: false
+
+  reject_old_samples: true
+  reject_old_samples_max_age: 24h
+  ingestion_rate_mb: 4
+  ingestion_burst_size_mb: 8
+  volume_enabled: true
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+analytics:
+  reporting_enabled: false

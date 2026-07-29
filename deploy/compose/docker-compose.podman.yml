@@ -22,3 +22,10 @@ services:
       # needs. Preferred over adding `:z` to the socket mount, which would permanently
       # relabel the host's podman socket and break podman itself.
       - label=type:container_runtime_t
+
+  # Same socket, same denial, same narrow fix: Alloy discovers containers and reads their
+  # logs through the runtime API. Without it Alloy starts, reports healthy, and ships nothing.
+  alloy:
+    security_opt:
+      - no-new-privileges:true
+      - label=type:container_runtime_t

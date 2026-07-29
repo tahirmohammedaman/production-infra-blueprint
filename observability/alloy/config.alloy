@@ -1,0 +1,56 @@
+// Grafana Alloy for the local Compose stack: container logs in, Loki out.
+//
+// Discovery is the only Compose-specific part. Everything a line goes through after it is
+// found lives in pipeline.alloy, which the Kubernetes configuration imports unchanged.
+//
+// Alloy collects logs only. Prometheus scrapes metrics directly and both services export
+// traces straight to Tempo, so there is one path per signal and no agent in the middle of the
+// two that already work.
+
+logging {
+	level  = "warn"
+	format = "logfmt"
+}
+
+import.file "blueprint" {
+	filename = "/etc/alloy/pipeline.alloy"
+}
+
+discovery.docker "compose" {
+	host = "unix:///var/run/docker.sock"
+
+	// This project's containers only. Whatever else is running on the machine stays out of Loki.
+	filter {
+		name   = "label"
+		values = ["com.docker.compose.project=blueprint"]
+	}
+}
+
+// The Compose service name becomes service_name, matching the Prometheus job name and the
+// Kubernetes app.kubernetes.io/name label. One name for a service across all three signals.
+discovery.relabel "compose" {
+	targets = []
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service_name"
+	}
+}
+
+loki.source.docker "compose" {
+	host          = "unix:///var/run/docker.sock"
+	targets       = discovery.docker.compose.targets
+	labels        = {"env" = "local"}
+	relabel_rules = discovery.relabel.compose.rules
+	forward_to    = [blueprint.structured_logs.default.receiver]
+}
+
+blueprint.structured_logs "default" {
+	forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

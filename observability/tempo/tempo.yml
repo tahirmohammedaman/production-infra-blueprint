@@ -1,0 +1,38 @@
+# Tempo for the local stack: OTLP over HTTP in, local disk, one day of traces.
+#
+# Both services export straight to Tempo with the OTLP exporter already on their classpath —
+# there is no collector in between. A collector earns its place when there is sampling,
+# filtering or fan-out to decide centrally; with two services and a fixed sampling rate set in
+# each, it would be one more process to keep alive for no decision it gets to make.
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # Short blocks so a trace is searchable a few minutes after the request, not an hour.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 24h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

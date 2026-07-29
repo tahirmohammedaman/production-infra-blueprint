@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.context.annotation.Bean;
 
 import dev.tahir.blueprint.platform.observability.CorrelationIdFilter;
+import dev.tahir.blueprint.platform.observability.OperationalSpanFilter;
 
 /**
  * Registered through {@code AutoConfiguration.imports} rather than component scanning.
@@ -24,4 +25,15 @@ public class PlatformAutoConfiguration {
     public CorrelationIdFilter correlationIdFilter() {
         return new CorrelationIdFilter();
     }
+
+    /**
+     * Spring Boot's tracing auto-configuration applies every {@code SpanExportingPredicate}
+     * bean before a span leaves the process, so declaring it is the whole integration.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public OperationalSpanFilter operationalSpanFilter() {
+        return new OperationalSpanFilter();
+    }
+
 }

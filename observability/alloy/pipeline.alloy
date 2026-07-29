@@ -1,0 +1,62 @@
+// Shared log-processing pipeline, imported by both the Compose and the Kubernetes Alloy
+// configurations.
+//
+// How a log line is *found* differs between the two environments. What it becomes once found
+// must not, or the same LogQL query returns different answers on a laptop and in production —
+// and the dashboards, which run those queries, lie in one of the two.
+
+declare "structured_logs" {
+	argument "forward_to" {
+		comment = "Receivers for processed log entries."
+	}
+
+	export "receiver" {
+		value = loki.process.structured.receiver
+	}
+
+	loki.process "structured" {
+		// Spring Boot writes ECS JSON and Traefik writes its own JSON; Postgres, Redis and Kafka
+		// write plain text. On a plain line these stages extract nothing and the line passes
+		// through untouched, still labelled with the service it came from.
+		stage.json {
+			expressions = {
+				level      = "log.level || level",
+				ts         = "\"@timestamp\" || time",
+				trace_id   = "traceId",
+				request_id = "requestId",
+			}
+		}
+
+		// ECS says INFO and Traefik says info. One spelling, or every level filter needs a regex.
+		stage.template {
+			source   = "level"
+			template = "{{ ToLower .Value }}"
+		}
+
+		stage.labels {
+			values = {
+				level = "",
+			}
+		}
+
+		// Identifiers with a value per request travel as structured metadata, never as labels:
+		// queryable, but they do not create a stream per value. The label budget is enforced by
+		// Loki itself; see max_label_names_per_series in observability/loki/loki.yml.
+		stage.structured_metadata {
+			values = {
+				trace_id   = "",
+				request_id = "",
+			}
+		}
+
+		// The application's own timestamp, not the time Alloy read the line. They differ by
+		// however far behind the pipeline is, which is exactly when the difference matters.
+		stage.timestamp {
+			source            = "ts"
+			format            = "RFC3339Nano"
+			action_on_failure = "skip"
+		}
+
+		forward_to = argument.forward_to.value
+	}
+}
