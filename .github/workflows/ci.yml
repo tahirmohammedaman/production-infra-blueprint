@@ -51,6 +51,7 @@ jobs:
       scripts: ${{ steps.filter.outputs.scripts }}
       infra: ${{ steps.filter.outputs.infra }}
       manifests: ${{ steps.filter.outputs.manifests }}
+      observability: ${{ steps.filter.outputs.observability }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -76,6 +77,10 @@ jobs:
               - 'deploy/k8s/**'
               - 'clusters/**'
               - '.sops.yaml'
+            observability:
+              - 'observability/**'
+              - 'deploy/compose/docker-compose.observability.yml'
+              - 'scripts/validate-observability.sh'
             workflows:
               - '.github/**'
             scripts:
@@ -216,6 +221,21 @@ jobs:
           #   with no published JSON schema. Everything with a schema is still strict.
           docker run --rm -v "${PWD}/rendered:/w:ro"             ghcr.io/yannh/kubeconform@sha256:5103f6f5e89061728aad4ad5a250627dd0fc9b2a92eb876f3762677a4222f9e0             -strict -summary -kubernetes-version "${KUBERNETES_VERSION}"             -ignore-missing-schemas -skip Secret /w
 
+  # Alert rules are code that only runs during an incident, which is the worst moment to learn
+  # one has a typo in a label. The rule unit tests, the routing-tree assertions and every
+  # configuration check run here, through the same pinned images the stack runs — so a rule
+  # that passes this job is evaluated by exactly the binary that passed it.
+  observability:
+    name: observability
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.observability == 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate configuration and run the alert unit tests
+        run: scripts/validate-observability.sh
+
   test:
     name: test (${{ matrix.service }})
     runs-on: ubuntu-24.04
@@ -298,7 +318,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-24.04
-    needs: [changes, format, static, infra, manifests, test]
+    needs: [changes, format, static, infra, manifests, observability, test]
     if: always()
     steps:
       - name: Verify no upstream job failed

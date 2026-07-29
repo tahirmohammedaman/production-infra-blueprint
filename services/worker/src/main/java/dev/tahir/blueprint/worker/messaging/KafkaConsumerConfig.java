@@ -13,6 +13,8 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.ExponentialBackOff;
 
 import dev.tahir.blueprint.platform.events.EventTypes;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 
 @Configuration
 public class KafkaConsumerConfig {
@@ -30,10 +32,15 @@ public class KafkaConsumerConfig {
      * <p>Deserialisation failures are not retried at all. A record that cannot be parsed
      * will never parse on the third attempt either, so it goes straight to the dead-letter
      * topic where a human can look at it.
+     *
+     * <p>A dead-letter topic nobody is told about is a place events go to be forgotten, so
+     * every routed record is also counted. The topic says <em>what</em> failed; the counter
+     * is what the DeadLetterTopicReceiving alert reads to say <em>that</em> something did.
      */
     @Bean
     DefaultErrorHandler errorHandler(
             KafkaTemplate<String, String> kafkaTemplate,
+            MeterRegistry registry,
             @Value("${blueprint.consumer.retry.initial-interval-ms:500}") long initialInterval,
             @Value("${blueprint.consumer.retry.multiplier:2.0}") double multiplier,
             @Value("${blueprint.consumer.retry.max-interval-ms:10000}") long maxInterval,
@@ -45,6 +52,10 @@ public class KafkaConsumerConfig {
                 // source partition: the DLT has one partition, and mirroring would target
                 // partitions that do not exist.
                 (record, exception) -> new TopicPartition(EventTypes.TOPIC_ITEM_EVENTS_DLT, 0));
+
+        Counter deadLettered = Counter.builder("blueprint.events.dead.lettered")
+                .description("Records routed to the dead-letter topic after exhausting retries or failing to parse")
+                .register(registry);
 
         ExponentialBackOff backOff = new ExponentialBackOff(initialInterval, multiplier);
         backOff.setMaxInterval(maxInterval);
@@ -60,6 +71,9 @@ public class KafkaConsumerConfig {
                             record.key(),
                             exception);
                     recoverer.accept((ConsumerRecord<?, ?>) record, exception);
+                    // Counted after the publish returns: if the DLT write itself fails, the
+                    // record is retried rather than lost, and must not be reported as routed.
+                    deadLettered.increment();
                 },
                 backOff);
 

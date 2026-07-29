@@ -1,0 +1,255 @@
+# Alerting rules. The error-budget burn alerts are in slo.yml; these cover what the budget
+# cannot see.
+#
+# Two severities, and the bar for each is deliberately high:
+#
+#   page    user-visible impact now, or a hole in monitoring that would hide it. Someone is
+#           woken up, so every page has to be actionable at 03:00 by whoever is on call.
+#   ticket  something is wrong that nobody outside will notice yet. Looked at in working
+#           hours, before it becomes a page.
+#
+# What is deliberately absent: CPU above 80%, memory above 80%, disk above 80%. Those are
+# causes, and a cause that is not hurting anyone is not worth waking someone for. The error
+# budget pages when users are hurt, whatever the cause turns out to be.
+#
+# Every alert carries `service`, which routing, grouping and inhibition all key on, and a
+# runbook link. The runbook holds the diagnosis; the annotation says what is wrong and why it
+# matters, in a sentence someone half-awake can act on.
+
+groups:
+  - name: blueprint.coverage
+    rules:
+      # The gateway is where the SLO is measured. When it stops being scraped, every burn-rate
+      # alert goes quiet — no requests, no errors, no burn — at exactly the moment every
+      # request may be failing. This alert exists to cover that hole.
+      - alert: GatewayDown
+        expr: absent(up{job="gateway"} == 1)
+        for: 2m
+        labels:
+          severity: page
+          service: gateway
+        annotations:
+          summary: The gateway is down or unscrapeable, so the availability SLO is blind
+          description: >-
+            No healthy gateway target for 2 minutes. Requests may all be failing, and the
+            error-budget alerts cannot fire without gateway metrics.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#gatewaydown
+
+      # The only consumer. A freshness SLO measured on processed events has no data when
+      # nothing is being processed, so staleness from a dead worker is invisible to it.
+      - alert: WorkerDown
+        expr: absent(up{job="worker"} == 1)
+        for: 5m
+        labels:
+          severity: page
+          service: worker
+        annotations:
+          summary: No worker is consuming, so the inventory read model is going stale
+          description: >-
+            The only consumer of item-events has been unreachable for 5 minutes. Writes still
+            succeed, the inventory summary stops reflecting them, and consumer lag is not
+            reported while nothing is consuming.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#workerdown
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: ticket
+          service: '{{ $labels.job }}'
+        annotations:
+          summary: 'Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}'
+          description: >-
+            The target has failed every scrape for 5 minutes. Either the process is down, or
+            it returned more samples than its sample_limit and the whole scrape was rejected.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#targetdown
+
+  - name: blueprint.async
+    rules:
+      # Events are waiting and none has been published in ten minutes: the relay cannot reach
+      # the broker. Requests keep succeeding — that is the point of the outbox, see ADR 0007 —
+      # but every write since the stall is missing from the read model.
+      #
+      # Both conditions, not either. A backlog alone is a busy relay; zero publishes alone is
+      # a quiet night.
+      - alert: OutboxRelayStalled
+        expr: |
+          (min by (job) (min_over_time(blueprint_outbox_pending_events[10m])) > 0)
+            and on (job)
+          (sum by (job) (increase(blueprint_outbox_published_total[10m])) == 0)
+        for: 5m
+        labels:
+          severity: page
+          service: api
+        annotations:
+          summary: The outbox relay has stopped publishing and events are piling up
+          description: >-
+            {{ $value }} or more events have been waiting for at least 15 minutes with nothing
+            published. The API is serving normally; the inventory read model is not being
+            updated.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#outboxrelaystalled
+
+      - alert: OutboxEventsStuck
+        expr: max by (job) (blueprint_outbox_stuck_events) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          service: api
+        annotations:
+          summary: '{{ $value }} outbox events exhausted their publish attempts'
+          description: >-
+            These events will never be published without intervention. The reconciler keeps
+            the read model's totals correct, but no consumer ever sees these events.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#outboxeventsstuck
+
+      - alert: ConsumerLagHigh
+        expr: job_topic:kafka_consumer_records_lag:sum{topic="item-events"} > 1000
+        for: 10m
+        labels:
+          severity: ticket
+          service: worker
+        annotations:
+          summary: 'The worker is {{ $value }} records behind on {{ $labels.topic }}'
+          description: >-
+            Lag has stayed above 1000 records for 10 minutes. The worker is alive and
+            consuming, but slower than events arrive.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#consumerlaghigh
+
+      - alert: DeadLetterTopicReceiving
+        expr: sum by (job) (increase(blueprint_events_dead_lettered_total[15m])) > 0
+        labels:
+          severity: ticket
+          service: worker
+        annotations:
+          summary: Events are being routed to the dead-letter topic
+          description: >-
+            Records dead-lettered in the last 15 minutes: {{ $value | humanize }}. Each one
+            exhausted its retries or could not be parsed, and is an update the read model never
+            applied.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#deadlettertopicreceiving
+
+      # The reconciler found the read model disagreeing with Postgres and fixed it. The fix
+      # worked, which is why this is not a page — but a correction means an event was lost or
+      # double-applied upstream, and that is the bug to find.
+      - alert: ProjectionDriftCorrected
+        expr: sum by (job) (increase(blueprint_projection_drift_corrections_total[1h])) > 0
+        labels:
+          severity: ticket
+          service: api
+        annotations:
+          summary: The reconciler corrected drift between the read model and Postgres
+          description: >-
+            The inventory projection disagreed with the system of record and was rewritten.
+            Something upstream dropped or repeated an event.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#projectiondriftcorrected
+
+  - name: blueprint.dependencies
+    rules:
+      - alert: DatabasePoolExhausted
+        expr: max by (job, instance) (hikaricp_connections_pending) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          service: api
+        annotations:
+          summary: 'Requests on {{ $labels.instance }} are queueing for database connections'
+          description: >-
+            Threads have been waiting for a pooled connection for 5 minutes. Latency will climb
+            before errors do; the latency SLO pages if it gets that far.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#databasepoolexhausted
+
+      # Mid-flight Redis failures fall back to Postgres by design (ADR 0007), so users do not
+      # see this. The database does: every summary read becomes a full aggregate query.
+      - alert: CacheUnavailable
+        expr: sum by (job) (rate(blueprint_cache_requests_total{result="error"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+          service: api
+        annotations:
+          summary: The API cannot reach Redis and is serving reads from Postgres
+          description: >-
+            Cache lookups have been failing for 10 minutes. Responses are still correct, but
+            database load is multiplied and the worker cannot update the projection either.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#cacheunavailable
+
+      - alert: JvmHeapPressure
+        expr: job_instance:jvm_heap_used:ratio > 0.9
+        for: 15m
+        labels:
+          severity: ticket
+          service: '{{ $labels.job }}'
+        annotations:
+          summary: '{{ $labels.instance }} has used over 90% of its heap for 15 minutes'
+          description: >-
+            Sustained, not a spike before a collection. The heap is derived from the container
+            memory limit, so the limit is what to revisit, against the measured RSS.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#jvmheappressure
+
+      - alert: CertificateExpiringSoon
+        expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 14 * 24 * 3600
+        for: 1h
+        labels:
+          severity: ticket
+          service: gateway
+        annotations:
+          summary: 'The certificate {{ $labels.name }} expires in under 14 days'
+          description: >-
+            cert-manager renews at 30 days remaining, so a certificate this close to expiry has
+            already failed to renew at least once.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#certificateexpiringsoon
+
+  - name: blueprint.monitoring
+    rules:
+      # Always firing. Alertmanager forwards it to an external dead man's switch every
+      # minute; when the switch stops hearing it, the alerting path itself is broken and the
+      # external service raises the alarm this stack no longer can.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          service: monitoring
+        annotations:
+          summary: The alerting pipeline is working. This alert is supposed to be firing.
+          description: >-
+            Routed to the dead man's switch. If it ever stops, Prometheus, Alertmanager, or the
+            route between them has failed.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#watchdog
+
+      - alert: LogPipelineDropping
+        expr: sum by (job) (rate(loki_write_dropped_entries_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+          service: monitoring
+        annotations:
+          summary: Alloy is dropping log lines instead of delivering them to Loki
+          description: >-
+            Lines rejected by Loki are discarded after retries. The usual cause is a new label
+            exceeding the label budget, which Loki rejects outright.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#logpipelinedropping
+
+      - alert: AlertmanagerNotificationsFailing
+        expr: sum by (integration) (rate(alertmanager_notifications_failed_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+          service: monitoring
+        annotations:
+          summary: 'Alertmanager cannot deliver to {{ $labels.integration }}'
+          description: >-
+            Alerts are firing and nobody is being told. The dead man's switch still works if
+            the webhook integration is healthy; check which one is failing.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#alertmanagernotificationsfailing
+
+      - alert: PrometheusRuleFailures
+        expr: sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total[10m])) > 0
+        labels:
+          severity: ticket
+          service: monitoring
+        annotations:
+          summary: 'Rules in {{ $labels.rule_group }} are failing to evaluate'
+          description: >-
+            A rule that fails to evaluate never fires. Every alert in the group is silently
+            disabled until this is fixed.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#prometheusrulefailures

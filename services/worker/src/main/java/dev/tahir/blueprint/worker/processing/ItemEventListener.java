@@ -44,9 +44,10 @@ public class ItemEventListener {
         this.duplicates = Counter.builder("blueprint.events.duplicates")
                 .description("Redelivered events skipped by the idempotency guard")
                 .register(registry);
+        // Bucket boundaries come from management.metrics.distribution.slo in application.yml,
+        // where they sit next to the objective they serve rather than in code.
         this.latency = Timer.builder("blueprint.events.end.to.end")
                 .description("Time from the originating transaction commit to projection update")
-                .publishPercentileHistogram()
                 .register(registry);
     }
 

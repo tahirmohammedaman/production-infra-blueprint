@@ -27,9 +27,10 @@ healthy replicas serving correct responses would be pulled from the load balance
 system they do not need in the request path is down. The outbox exists precisely so this
 failure is survivable, and gating on Kafka would throw that away.
 
-The backlog is not ignored — it is alerted on. `blueprint_outbox_pending` and
-`blueprint_outbox_stuck` are the signals, and paging on those is the correct response to a
-broker outage. Removing the service from rotation is not.
+The backlog is not ignored — it is alerted on. `blueprint_outbox_pending_events` and
+`blueprint_outbox_stuck_events` are the signals, and paging when the relay has stopped
+publishing (`OutboxRelayStalled`) is the correct response to a broker outage. Removing the
+service from rotation is not.
 
 ### Why Redis is included
 

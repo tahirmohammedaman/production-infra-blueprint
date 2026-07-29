@@ -20,6 +20,8 @@ ok "stack removed"
 if [ "${PRUNE_IMAGES:-false}" = "true" ]; then
   CONTAINER=$(container_cmd)
   log "removing built images"
-  $CONTAINER image rm -f "blueprint-api:${APP_VERSION:-0.1.0-local}" >/dev/null 2>&1 || true
+  for service in api worker; do
+    $CONTAINER image rm -f "blueprint-${service}:${APP_VERSION:-0.1.0-local}" >/dev/null 2>&1 || true
+  done
   ok "images removed"
 fi

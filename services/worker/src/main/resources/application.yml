@@ -74,8 +74,11 @@ management:
       application: ${spring.application.name}
       version: ${spring.application.version}
     distribution:
-      percentiles-histogram:
-        blueprint.events.end.to.end: true
+      # Explicit boundaries rather than Micrometer's 69-bucket percentile histogram. The
+      # freshness objective asks how many events reached the read model within 10 seconds;
+      # a bucket at exactly 10s answers that without interpolating between 8.59 and 10.02.
+      slo:
+        blueprint.events.end.to.end: 500ms,1s,2s,5s,10s,30s
   tracing:
     sampling:
       probability: ${TRACE_SAMPLE_RATE:0.1}

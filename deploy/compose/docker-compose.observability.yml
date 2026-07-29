@@ -1,0 +1,78 @@
+# Observability for the local stack: metrics, logs, traces, alerts and the dashboards over
+# them. Applied on top of docker-compose.yml by `make up` and `make bootstrap`, always — a
+# local stack with no dashboards is not the thing this repository demonstrates.
+#
+# A separate file so the application stack still reads on its own. Every configuration file
+# mounted below is the one the cluster runs as well; see observability/README.md for how the
+# two environments share them.
+#
+# UIs are published on 127.0.0.1 only. Grafana allows anonymous read access, and nothing here
+# has authentication worth the name, which is fine on a laptop and not fine on a café network.
+#
+# Memory limits are sized from measured RSS after `make smoke`, like the application's; the
+# figures are in docs/cost-analysis.md.
+
+x-observability: &observability
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  # Unlike Postgres and Redis (see docker-compose.yml), these images start as an unprivileged
+  # user and never change user, so they can drop every capability and keep a read-only root
+  # filesystem. Everything they write goes to a named volume or to /tmp.
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=32m
+
+services:
+  # ------------------------------------------------------------------- metrics
+  prometheus:
+    image: docker.io/prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
+    <<: *observability
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      # POST /-/reload after editing a rule, instead of restarting and losing the head block.
+      - --web.enable-lifecycle
+      # exemplar-storage: a latency bucket that links to a trace that actually landed in it.
+      # extra-scrape-metrics: exports each target's sample_limit as scrape_sample_limit, so the
+      # series budget can be graphed against what is actually scraped.
+      - --enable-feature=exemplar-storage,extra-scrape-metrics
+    volumes:
+      - ../../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - ../../observability/prometheus/rules:/etc/prometheus/rules:ro,z
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9095}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    mem_limit: 384m
+
+  alertmanager:
+    image: docker.io/prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d
+    <<: *observability
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      # One instance, no peers. The gossip listener would be a port opened for nobody.
+      - --cluster.listen-address=
+    volumes:
+      - ../../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro,z
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9093/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    mem_limit: 64m
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

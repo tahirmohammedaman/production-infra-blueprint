@@ -47,13 +47,17 @@ detect_container_socket() {
   fi
 }
 
-# Extra compose files needed by the local runtime. Returns the flags to append, or nothing.
+# Compose files layered on top of docker-compose.yml. Returns the flags to append.
+#
+# The observability overlay is always included: the local stack is the application plus the
+# metrics, logs, traces and dashboards over it. The podman overlay is added only where the
+# runtime needs it.
 compose_overlays() {
-  local flags=""
+  local flags="-f deploy/compose/docker-compose.observability.yml"
   if command -v podman >/dev/null 2>&1 \
      && ! command -v docker >/dev/null 2>&1 \
      && [ "$(getenforce 2>/dev/null || echo Disabled)" = "Enforcing" ]; then
-    flags="-f deploy/compose/docker-compose.podman.yml"
+    flags="$flags -f deploy/compose/docker-compose.podman.yml"
   fi
   echo "$flags"
 }

@@ -8,8 +8,11 @@ SHELL         := /bin/bash
 SERVICES_DIR := services
 GRADLE       := ./gradlew
 COMPOSE_FILE := deploy/compose/docker-compose.yml
-# Rootless podman on an SELinux-enforcing host needs one extra setting on the gateway.
-COMPOSE_OVERLAY := $(shell test "$$(getenforce 2>/dev/null)" = "Enforcing" \
+# Observability is part of the local stack, not an optional extra. Mirrors compose_overlays()
+# in scripts/lib.sh, which the scripts use.
+COMPOSE_OVERLAY := -f deploy/compose/docker-compose.observability.yml
+# Rootless podman on an SELinux-enforcing host needs one extra setting on the gateway and Alloy.
+COMPOSE_OVERLAY += $(shell test "$$(getenforce 2>/dev/null)" = "Enforcing" \
                      && ! command -v docker >/dev/null 2>&1 \
                      && echo "-f deploy/compose/docker-compose.podman.yml")
 SERVICES     := api worker
@@ -173,6 +176,26 @@ redis-cli: ## Open a redis-cli against the local cache
 .PHONY: psql
 psql: ## Open a psql shell against the local database
 	$(COMPOSE) -f $(COMPOSE_FILE) $(COMPOSE_OVERLAY) exec postgres psql -U $${DB_USER:-blueprint} -d $${DB_NAME:-blueprint}
+
+# -------------------------------------------------------------- observability
+
+PROMETHEUS_PORT   ?= 9095
+ALERTMANAGER_PORT ?= 9093
+
+.PHONY: obs-validate
+obs-validate: ## Validate every observability config and run the alert unit tests, as CI does
+	scripts/validate-observability.sh
+
+.PHONY: obs-reload
+obs-reload: ## Apply edited alert rules and Alertmanager routing without restarting anything
+	curl -fsS -X POST http://localhost:$(PROMETHEUS_PORT)/-/reload
+	curl -fsS -X POST http://localhost:$(ALERTMANAGER_PORT)/-/reload
+	@echo "reloaded; check http://localhost:$(PROMETHEUS_PORT)/rules"
+
+.PHONY: alerts
+alerts: ## List the alerts firing right now
+	@curl -fsS http://localhost:$(ALERTMANAGER_PORT)/api/v2/alerts?active=true \
+		| jq -r '.[] | "\(.labels.severity)\t\(.labels.alertname)\t\(.annotations.summary)"'
 
 # --------------------------------------------------------------- infrastructure
 

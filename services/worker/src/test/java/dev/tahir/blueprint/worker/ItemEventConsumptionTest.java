@@ -30,6 +30,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.tahir.blueprint.platform.events.EventEnvelope;
 import dev.tahir.blueprint.platform.events.EventTypes;
 import dev.tahir.blueprint.worker.processing.InventorySummary;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * End-to-end consumer behaviour against a real broker: projection updates, redelivery
@@ -49,6 +50,9 @@ class ItemEventConsumptionTest extends WorkerIntegrationTestBase {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void resetProjection() {
@@ -110,6 +114,14 @@ class ItemEventConsumptionTest extends WorkerIntegrationTestBase {
 
         await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(drain(EventTypes.TOPIC_ITEM_EVENTS_DLT))
                 .isNotEmpty());
+
+        // The topic proves the record was routed; the counter is how anyone finds out without
+        // reading the topic. It is what the DeadLetterTopicReceiving alert fires on.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(meterRegistry
+                        .get("blueprint.events.dead.lettered")
+                        .counter()
+                        .count())
+                .isGreaterThanOrEqualTo(1.0));
 
         // The partition kept moving: a well-formed event published after the poison record is
         // still processed. Without bounded retry and dead-lettering, this assertion is what

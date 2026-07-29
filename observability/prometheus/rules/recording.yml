@@ -1,0 +1,86 @@
+# Recording rules: the queries dashboards and alerts run most often, computed once per
+# evaluation instead of once per panel, per viewer, per refresh.
+#
+# Names follow the Prometheus convention `level:metric:operations`, so a reader can tell from
+# the name alone what was aggregated away and over which window. The SLO recording rules are
+# in slo.yml; these are the RED and USE views the dashboards are built on.
+
+groups:
+  - name: blueprint.api.red
+    rules:
+      # Rate, errors and duration from the API's own histogram, per route. This is the view
+      # for *which* endpoint is misbehaving. It cannot see requests that never reached the
+      # process, which is why the SLO is measured at the gateway instead.
+      - record: job_uri_method:http_server_requests:rate5m
+        expr: sum by (job, uri, method) (rate(http_server_requests_seconds_count{job="api"}[5m]))
+
+      - record: job_uri_method:http_server_requests_errors:rate5m
+        expr: sum by (job, uri, method) (rate(http_server_requests_seconds_count{job="api", status=~"5.."}[5m]))
+
+      - record: job:http_server_requests:rate5m
+        expr: sum by (job) (job_uri_method:http_server_requests:rate5m)
+
+      - record: job:http_server_requests_errors:ratio_rate5m
+        expr: |
+          sum by (job) (job_uri_method:http_server_requests_errors:rate5m)
+            /
+          sum by (job) (job_uri_method:http_server_requests:rate5m)
+
+      # Six SLO buckets make these quantiles coarse by design — accurate at 50/100/250/500 ms
+      # and 1/2 s, interpolated between. That is the trade made for a 90% smaller series
+      # count; see the series budget in docs/cost-analysis.md.
+      - record: job_uri_method:http_server_requests_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (job, uri, method, le) (rate(http_server_requests_seconds_bucket{job="api"}[5m])))
+
+      - record: job:http_server_requests_seconds:p99_5m
+        expr: |
+          histogram_quantile(0.99,
+            sum by (job, le) (rate(http_server_requests_seconds_bucket{job="api"}[5m])))
+
+  - name: blueprint.async
+    rules:
+      - record: job:blueprint_outbox_published:rate5m
+        expr: sum by (job) (rate(blueprint_outbox_published_total[5m]))
+
+      - record: job:blueprint_outbox_publish_failures:rate5m
+        expr: sum by (job) (rate(blueprint_outbox_publish_failures_total[5m]))
+
+      - record: job:blueprint_events_processed:rate5m
+        expr: sum by (job) (rate(blueprint_events_processed_total[5m]))
+
+      - record: job:blueprint_events_duplicates:rate5m
+        expr: sum by (job) (rate(blueprint_events_duplicates_total[5m]))
+
+      # Total lag across every partition of the topic. The Kafka client reports it per
+      # partition, per consumer thread; the number that matters is how far behind the group
+      # is as a whole. Reported by the consumer itself, so it vanishes when the worker does —
+      # WorkerDown covers that case, not this series.
+      - record: job_topic:kafka_consumer_records_lag:sum
+        expr: sum by (job, topic) (kafka_consumer_fetch_manager_records_lag{job="worker"})
+
+      - record: job:blueprint_events_end_to_end_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (job, le) (rate(blueprint_events_end_to_end_seconds_bucket[5m])))
+
+  - name: blueprint.runtime
+    rules:
+      # Heap in use against the heap the JVM derived from the container limit. Summed across
+      # pools because the pools are an implementation detail of whichever collector the JVM
+      # picked — SerialGC on a node this size, which has three.
+      - record: job_instance:jvm_heap_used:ratio
+        expr: |
+          sum by (job, instance) (jvm_memory_used_bytes{area="heap"})
+            /
+          sum by (job, instance) (jvm_memory_max_bytes{area="heap"})
+
+      - record: job_instance:jvm_gc_pause_seconds:rate5m
+        expr: sum by (job, instance) (rate(jvm_gc_pause_seconds_sum[5m]))
+
+      - record: job_instance:hikaricp_connections_usage:ratio
+        expr: |
+          max by (job, instance) (hikaricp_connections_active)
+            /
+          max by (job, instance) (hikaricp_connections_max)

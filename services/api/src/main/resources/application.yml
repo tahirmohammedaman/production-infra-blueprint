@@ -133,10 +133,13 @@ management:
       application: ${spring.application.name}
       version: ${spring.application.version}
     distribution:
-      percentiles-histogram:
-        http.server.requests: true
-      # Explicit buckets keep histogram cardinality bounded and are what the SLO
-      # burn-rate rules in observability/prometheus/rules/slo.yml query against.
+      # Only these boundaries are published as buckets. Micrometer's percentile histogram
+      # was on here and added 69 more to every series: measured at 75 bucket series per
+      # uri/method/status combination, 600 of them for the eight combinations one smoke
+      # test produces, and not one of them a threshold anything alerts on. The per-route
+      # latency panels read these six. The SLO itself is measured at the gateway, which is
+      # the only place a request that never reached this process is counted — see
+      # observability/prometheus/rules/slo.yml.
       slo:
         http.server.requests: 50ms,100ms,250ms,500ms,1s,2s
   observations:

@@ -1,0 +1,95 @@
+# Alertmanager routing. One file for both environments.
+#
+# Two decisions are encoded here and both are asserted by `make obs-validate`:
+#
+#   1. Severity decides the channel, and there are only two. `page` wakes someone up and is
+#      reserved for user-visible impact happening now — in practice, fast error-budget burn.
+#      `ticket` means someone should look during working hours. An alert that is neither
+#      should not exist, which is why there is no `warning` or `info`.
+#
+#   2. The local stack never notifies anyone. Its Prometheus stamps env="local", and the first
+#      route sends that to a receiver with no integrations. Alerts still fire and are visible in
+#      the Alertmanager UI and in Grafana, which is what you want while breaking things on
+#      purpose, but nobody's phone rings because a laptop went to sleep.
+#
+# Receiver credentials are read from files (`*_file`), never written here and never passed as
+# environment variables. In the cluster they are projected from the `alertmanager-receivers`
+# Secret; locally the files do not exist, and do not need to, because nothing routes to a
+# receiver that would read them. Alertmanager only opens the file when it sends.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: blackhole
+  # Grouped per alert and per service, so one failing dependency produces one notification
+  # per symptom rather than one per replica.
+  group_by: [alertname, env, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    - matchers: ['env="local"']
+      receiver: blackhole
+
+    # Always firing, by design. If the dead man's switch stops hearing it, the alerting path
+    # itself is broken — Prometheus down, Alertmanager down, or the route below misconfigured
+    # — and the external service raises the alarm that this stack no longer can.
+    - matchers: ['alertname="Watchdog"']
+      receiver: deadmans-switch
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+
+    - matchers: ['severity="page"']
+      receiver: pager
+      # A page that has not been acknowledged in an hour is re-sent. Four hours of silence
+      # on a burning error budget is how incidents become postmortems.
+      repeat_interval: 1h
+
+    - matchers: ['severity="ticket"']
+      receiver: chat
+      repeat_interval: 12h
+
+inhibit_rules:
+  # The fast-burn page and the slow-burn ticket for the same objective describe the same
+  # incident. Once the page is firing, the ticket is noise.
+  - source_matchers: ['severity="page"']
+    target_matchers: ['severity="ticket"']
+    equal: [env, service, slo]
+
+  # A target that cannot be scraped produces no data, and the cause-level tickets about it go
+  # quiet or go strange. TargetDown is the one to act on. Pages are deliberately not in this
+  # list: a ticket must never be able to silence a page.
+  - source_matchers: ['alertname="TargetDown"']
+    target_matchers: ['alertname=~"ConsumerLagHigh|JvmHeapPressure|DatabasePoolExhausted|CacheUnavailable"']
+    equal: [env, job]
+
+receivers:
+  - name: blackhole
+
+  - name: deadmans-switch
+    webhook_configs:
+      - url_file: /etc/alertmanager-receivers/deadmans-switch-url
+        send_resolved: false
+
+  - name: pager
+    pagerduty_configs:
+      - routing_key_file: /etc/alertmanager-receivers/pagerduty-routing-key
+        send_resolved: true
+        severity: critical
+        description: '{{ .CommonAnnotations.summary }}'
+        details:
+          runbook: '{{ .CommonAnnotations.runbook_url }}'
+          env: '{{ .CommonLabels.env }}'
+
+  - name: chat
+    slack_configs:
+      - api_url_file: /etc/alertmanager-receivers/slack-webhook-url
+        channel: '#blueprint-alerts'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.description }}
+          {{ end }}Runbook: {{ .CommonAnnotations.runbook_url }}

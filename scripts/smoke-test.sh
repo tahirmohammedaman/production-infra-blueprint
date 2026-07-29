@@ -31,6 +31,15 @@ wait_for_http "$WORKER_MGMT/actuator/health/readiness" 200 180 \
   || die "worker did not become ready within 180s"
 ok "worker is ready"
 
+# Ready on the management port is not the same as routable. The gateway runs its own health
+# check every 10 seconds, so for up to one interval after the API reports ready the gateway
+# still has no healthy backend and answers 503 itself. Asserting straight away made this script
+# fail in exactly that window — the same window a deploy has to survive, which is why the
+# readiness probe and the gateway's check are both in the zero-downtime drill.
+wait_for_http "$API/api/v1/items?page=0&size=1" 200 30 \
+  || die "the gateway did not route to the api within 30s of it reporting ready"
+ok "gateway routes to the api"
+
 log "operational endpoints"
 assert_body_contains "liveness reports UP"           "$MGMT/actuator/health/liveness"  '"status":"UP"'
 assert_body_contains "readiness reports UP"          "$MGMT/actuator/health/readiness" '"status":"UP"'
@@ -92,9 +101,31 @@ assert_body_contains "the API route is labelled by template, not by id" \
 # pass, which makes it the single most valuable assertion in the file.
 log "asynchronous path: outbox -> kafka -> worker -> cache"
 
-BASELINE=$(curl -fsS "$API/api/v1/inventory/summary" | sed -n 's/.*"totalQuantity":\([0-9-]*\).*/\1/p')
+summary_total() {
+  curl -fsS "$API/api/v1/inventory/summary" | sed -n 's/.*"totalQuantity":\([0-9-]*\).*/\1/p'
+}
+
+# The read model is eventually consistent, and the item created above is still travelling
+# through it. A baseline read now undercounts by that item's quantity, and the convergence
+# check below then fails by exactly that amount ("expected 17, observed 20"). Wait for the
+# projection to stop moving first: three identical reads a second apart, which is several relay
+# polls with nothing left in flight.
+BASELINE=""
+STABLE=0
+DEADLINE=$((SECONDS + 30))
+while [ "$STABLE" -lt 3 ] && [ "$SECONDS" -lt "$DEADLINE" ]; do
+  CURRENT=$(summary_total)
+  if [ -n "$CURRENT" ] && [ "$CURRENT" = "$BASELINE" ]; then
+    STABLE=$((STABLE + 1))
+  else
+    STABLE=0
+    BASELINE="$CURRENT"
+  fi
+  sleep 1
+done
 [ -n "$BASELINE" ] || die "inventory summary did not return a totalQuantity"
-ok "inventory summary readable, baseline totalQuantity=$BASELINE"
+[ "$STABLE" -ge 3 ] || die "the inventory projection was still changing after 30s"
+ok "inventory summary settled, baseline totalQuantity=$BASELINE"
 
 ASYNC_NAME="async-$(date +%s)-$RANDOM"
 ASYNC_QTY=17
@@ -106,7 +137,7 @@ EXPECTED=$((BASELINE + ASYNC_QTY))
 DEADLINE=$((SECONDS + 60))
 OBSERVED=""
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
-  OBSERVED=$(curl -fsS "$API/api/v1/inventory/summary" | sed -n 's/.*"totalQuantity":\([0-9-]*\).*/\1/p')
+  OBSERVED=$(summary_total)
   [ "$OBSERVED" = "$EXPECTED" ] && break
   sleep 1
 done
