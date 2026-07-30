@@ -59,7 +59,7 @@ ok "secrets present in $SECRETS_DIR (gitignored, development values only)"
 
 log "building and starting the stack"
 # shellcheck disable=SC2086  # OVERLAYS is a deliberately unquoted flag list
-$COMPOSE -f "$COMPOSE_FILE" $OVERLAYS up -d --build
+compose_up "$COMPOSE" -f "$COMPOSE_FILE" $OVERLAYS
 
 log "waiting for the API to report ready"
 if ! wait_for_http "http://localhost:${MGMT_PORT}/actuator/health/readiness" 200 240; then

@@ -129,8 +129,11 @@ bootstrap: ## Bring up the whole local stack from nothing and verify it works
 	scripts/bootstrap.sh
 
 .PHONY: up
-up: ## Start the local stack in the background
-	$(COMPOSE) -f $(COMPOSE_FILE) $(COMPOSE_OVERLAY) up -d --build
+up: ## Start the local stack in the background, running freshly built images
+	@# podman-compose keeps running containers on their old image after --build, and cannot
+	@# replace the API alone while the gateway and worker depend on it. See compose_up() in
+	@# scripts/lib.sh for the full story; docker compose needs none of this.
+	$(COMPOSE) -f $(COMPOSE_FILE) $(COMPOSE_OVERLAY) up -d --build $(if $(findstring podman-compose,$(COMPOSE)),--force-recreate,)
 
 .PHONY: down
 down: ## Stop the local stack and delete its volumes

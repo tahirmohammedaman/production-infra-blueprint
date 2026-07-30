@@ -143,6 +143,22 @@ groups:
             Something upstream dropped or repeated an event.
           runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#projectiondriftcorrected
 
+      # The reconciler only corrects when nothing is in flight, so it cannot double-count an
+      # event on its way to the projection. The price is that under writes arriving more often
+      # than every 30 seconds it waits for a lull, and a system that never pauses would never be
+      # reconciled. Every run on an instance deferred for two hours is that case.
+      - alert: ReconciliationStarved
+        expr: increase(blueprint_projection_reconcile_deferred_total[2h]) >= 23
+        labels:
+          severity: ticket
+          service: api
+        annotations:
+          summary: 'The projection has not been reconciled on {{ $labels.instance }} for two hours'
+          description: >-
+            Every reconciliation run in the last two hours found events in flight and stood
+            down. Drift, if there is any, is not being repaired.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#reconciliationstarved
+
   - name: blueprint.dependencies
     rules:
       - alert: DatabasePoolExhausted

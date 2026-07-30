@@ -73,10 +73,29 @@ public class OutboxEvent {
         this.lastError = null;
     }
 
+    /**
+     * A failure that belongs to this event: the broker received it and refused it, so trying
+     * again will fail the same way. Counted towards the attempt limit, after which the event
+     * is stuck and an operator is told.
+     */
     public void recordFailure(String error) {
         this.attempts++;
-        // Bounded so a driver stack trace cannot blow up the row or the log line it lands in.
-        this.lastError = error != null && error.length() > 500 ? error.substring(0, 500) : error;
+        this.lastError = truncate(error);
+    }
+
+    /**
+     * A failure that says nothing about this event: the broker was unreachable or did not
+     * answer in time. Recorded for whoever reads the row, but not counted. Counting it meant a
+     * broker outage of about two minutes used up the attempts of every event written while it
+     * lasted, and stranded all of them — the outage the outbox exists to absorb.
+     */
+    public void recordTransientFailure(String error) {
+        this.lastError = truncate(error);
+    }
+
+    // Bounded so a driver stack trace cannot blow up the row or the log line it lands in.
+    private static String truncate(String error) {
+        return error != null && error.length() > 500 ? error.substring(0, 500) : error;
     }
 
     public UUID getId() {

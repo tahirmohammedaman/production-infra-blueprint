@@ -180,6 +180,10 @@ blueprint:
     enabled: true
     initial-delay: PT30S
     interval: PT5M
+    # A run proceeds only if nothing was published in this long. Well over the second or so
+    # the worker takes to apply a published event; a worker further behind than this is
+    # already firing ConsumerLagHigh.
+    quiet-period: PT30S
   kafka:
     # Serving pods do not create topics in production; the deploy-time Job does.
     create-topics: false

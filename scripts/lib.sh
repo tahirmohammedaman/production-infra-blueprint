@@ -62,6 +62,28 @@ compose_overlays() {
   echo "$flags"
 }
 
+# Brings the stack up with the freshly built images actually running.
+#
+# docker compose recreates a container whose image changed. podman-compose does not: `up
+# --build` rebuilds the image and keeps the running container. Replacing the API on its own
+# fails too, because podman records depends_on as a hard dependency (--requires): the gateway
+# and worker hold the API container in place, podman-compose prints the error, and the old code
+# keeps serving. Found when a fix that passed its tests was nowhere to be seen in the running
+# stack. Recreating the whole project lets podman-compose tear it down in dependency order;
+# the volumes, and so the data, survive.
+#
+# Usage: compose_up "$COMPOSE" -f file.yml [-f overlay.yml ...]
+compose_up() {
+  local compose="$1"
+  shift
+  if [ "$compose" = "podman-compose" ]; then
+    $compose "$@" up -d --build --force-recreate
+  else
+    # shellcheck disable=SC2086  # "docker compose" is two words on purpose
+    $compose "$@" up -d --build
+  fi
+}
+
 # Creates a secret file if it does not already exist, with an unguessable value and
 # owner-only permissions. Never overwrites: re-running bootstrap must not invalidate the
 # credentials the running database was initialised with.

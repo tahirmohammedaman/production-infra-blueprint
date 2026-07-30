@@ -1,5 +1,6 @@
 package dev.tahir.blueprint.outbox;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,4 +39,15 @@ public interface OutboxRepository extends JpaRepository<OutboxEvent, UUID> {
 
     @Query("select count(e) from OutboxEvent e where e.publishedAt is null and e.attempts >= :maxAttempts")
     long countStuck(@Param("maxAttempts") int maxAttempts);
+
+    /**
+     * Events that may still be on their way to the read model: written and not yet published,
+     * or published so recently that the worker may not have applied them.
+     *
+     * <p>Stuck events are excluded. They will never arrive, and the drift they leave behind is
+     * exactly what the reconciler exists to repair; counting them would defer it forever.
+     */
+    @Query("select count(e) from OutboxEvent e"
+            + " where (e.publishedAt is null and e.attempts < :maxAttempts) or e.publishedAt > :since")
+    long countInFlight(@Param("maxAttempts") int maxAttempts, @Param("since") Instant since);
 }

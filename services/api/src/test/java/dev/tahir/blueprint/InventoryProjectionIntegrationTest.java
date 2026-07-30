@@ -2,6 +2,7 @@ package dev.tahir.blueprint;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -17,6 +18,8 @@ import dev.tahir.blueprint.cache.InventoryReconciler;
 import dev.tahir.blueprint.cache.InventorySummary;
 import dev.tahir.blueprint.domain.Item;
 import dev.tahir.blueprint.domain.ItemRepository;
+import dev.tahir.blueprint.outbox.OutboxEvent;
+import dev.tahir.blueprint.outbox.OutboxRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
@@ -37,12 +40,16 @@ class InventoryProjectionIntegrationTest extends IntegrationTestBase {
 
     private static final String KEY_DISTINCT = "blueprint:inventory:distinct";
     private static final String KEY_QUANTITY = "blueprint:inventory:quantity";
+    private static final int MAX_ATTEMPTS = 10;
 
     @Autowired
     private TestRestTemplate rest;
 
     @Autowired
     private ItemRepository items;
+
+    @Autowired
+    private OutboxRepository outbox;
 
     @Autowired
     private StringRedisTemplate counters;
@@ -57,11 +64,14 @@ class InventoryProjectionIntegrationTest extends IntegrationTestBase {
 
     @BeforeEach
     void reset() {
+        // The outbox is cleared too: rows left by another test class would look like events in
+        // flight and defer every reconciliation here.
+        outbox.deleteAll();
         items.deleteAll();
         counters.delete(KEY_DISTINCT);
         counters.delete(KEY_QUANTITY);
         summaries.delete(InventorySummary.CACHE_KEY);
-        reconciler = new InventoryReconciler(items, counters, summaries, registry, true);
+        reconciler = reconciler(true);
     }
 
     @Test
@@ -144,10 +154,65 @@ class InventoryProjectionIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("stands down while an event is still on its way to the projection")
+    void defersWhileAnEventIsUnpublished() {
+        // The item is committed and its event is in the outbox: the projection is behind by
+        // exactly this item, legitimately. Correcting now would count it twice once the event
+        // lands on top of the corrected totals.
+        items.save(newItem("in-flight-widget", 5));
+        outbox.save(newEvent());
+        counters.opsForValue().set(KEY_DISTINCT, "0");
+        counters.opsForValue().set(KEY_QUANTITY, "0");
+        double driftBefore = driftCorrections();
+        double deferredBefore = deferrals();
+
+        reconciler.reconcile();
+
+        assertThat(counters.opsForValue().get(KEY_QUANTITY)).isEqualTo("0");
+        assertThat(driftCorrections()).isEqualTo(driftBefore);
+        assertThat(deferrals()).isGreaterThan(deferredBefore);
+    }
+
+    @Test
+    @DisplayName("stands down while a just-published event may not have been applied yet")
+    void defersWithinTheQuietPeriodAfterAPublish() {
+        items.save(newItem("just-published-widget", 5));
+        OutboxEvent published = newEvent();
+        published.markPublished();
+        outbox.save(published);
+        counters.opsForValue().set(KEY_QUANTITY, "0");
+        double deferredBefore = deferrals();
+
+        reconciler.reconcile();
+
+        assertThat(counters.opsForValue().get(KEY_QUANTITY)).isEqualTo("0");
+        assertThat(deferrals()).isGreaterThan(deferredBefore);
+    }
+
+    @Test
+    @DisplayName("reconciles past stuck events, because they will never arrive")
+    void correctsDespiteStuckEvents() {
+        // A stuck event is the one case where the projection is behind for good. Deferring on
+        // it would switch the reconciler off precisely when it is needed.
+        items.save(newItem("stuck-widget", 5));
+        OutboxEvent stuck = newEvent();
+        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            stuck.recordFailure("rejected by the broker");
+        }
+        outbox.save(stuck);
+        counters.opsForValue().set(KEY_DISTINCT, "0");
+        counters.opsForValue().set(KEY_QUANTITY, "0");
+
+        reconciler.reconcile();
+
+        assertThat(counters.opsForValue().get(KEY_QUANTITY)).isEqualTo("5");
+    }
+
+    @Test
     @DisplayName("does nothing at all when reconciliation is switched off")
     void skipsEntirelyWhenDisabled() {
         items.save(newItem("ignored-widget", 9));
-        InventoryReconciler disabled = new InventoryReconciler(items, counters, summaries, registry, false);
+        InventoryReconciler disabled = reconciler(false);
 
         disabled.reconcile();
 
@@ -157,8 +222,17 @@ class InventoryProjectionIntegrationTest extends IntegrationTestBase {
         assertThat(summaries.opsForValue().get(InventorySummary.CACHE_KEY)).isNull();
     }
 
+    private InventoryReconciler reconciler(boolean enabled) {
+        return new InventoryReconciler(
+                items, outbox, counters, summaries, registry, enabled, Duration.ofSeconds(30), MAX_ATTEMPTS);
+    }
+
     private double driftCorrections() {
         return registry.get("blueprint.projection.drift.corrections").counter().count();
+    }
+
+    private double deferrals() {
+        return registry.get("blueprint.projection.reconcile.deferred").counter().count();
     }
 
     private double counterValue(String result) {
@@ -170,5 +244,9 @@ class InventoryProjectionIntegrationTest extends IntegrationTestBase {
 
     private Item newItem(String name, int quantity) {
         return new Item(UUID.randomUUID(), name, "projection test fixture", quantity);
+    }
+
+    private static OutboxEvent newEvent() {
+        return new OutboxEvent(UUID.randomUUID(), UUID.randomUUID().toString(), "item.created", null, "{}");
     }
 }

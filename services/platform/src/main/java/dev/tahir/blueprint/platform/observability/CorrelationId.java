@@ -1,6 +1,7 @@
 package dev.tahir.blueprint.platform.observability;
 
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import org.slf4j.MDC;
 
@@ -27,10 +28,18 @@ public final class CorrelationId {
 
     /** Runs {@code action} with {@code correlationId} in the MDC, restoring the previous value afterwards. */
     public static void scoped(String correlationId, Runnable action) {
+        scoped(correlationId, () -> {
+            action.run();
+            return null;
+        });
+    }
+
+    /** As {@link #scoped(String, Runnable)}, for an action whose result the caller needs. */
+    public static <T> T scoped(String correlationId, Supplier<T> action) {
         String previous = MDC.get(MDC_KEY);
         MDC.put(MDC_KEY, correlationId);
         try {
-            action.run();
+            return action.get();
         } finally {
             if (previous != null) {
                 MDC.put(MDC_KEY, previous);
