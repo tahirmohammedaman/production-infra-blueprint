@@ -40,9 +40,10 @@ fi
 # because the Postgres entrypoint and Spring's configtree expect different file names for
 # the same value.
 log "generating local secret files"
-mkdir -p "$SECRETS_DIR/postgres" "$SECRETS_DIR/app"
+mkdir -p "$SECRETS_DIR/postgres" "$SECRETS_DIR/app" "$SECRETS_DIR/grafana"
 generate_secret "$SECRETS_DIR/postgres/db_password"
 cp -f "$SECRETS_DIR/postgres/db_password" "$SECRETS_DIR/app/spring.datasource.password"
+generate_secret "$SECRETS_DIR/grafana/admin_password"
 
 # The two files need different modes, for a reason worth understanding rather than
 # working around. Postgres runs as root in its container and drops privileges itself; with
@@ -55,6 +56,8 @@ cp -f "$SECRETS_DIR/postgres/db_password" "$SECRETS_DIR/app/spring.datasource.pa
 # `fsGroup` matching the pod's user, so the credential is never world-readable anywhere.
 chmod 600 "$SECRETS_DIR/postgres/db_password"
 chmod 644 "$SECRETS_DIR/app/spring.datasource.password"
+# Grafana runs as UID 472, outside the host user's range for the same reason as our images.
+chmod 644 "$SECRETS_DIR/grafana/admin_password"
 ok "secrets present in $SECRETS_DIR (gitignored, development values only)"
 
 log "building and starting the stack"
@@ -89,6 +92,10 @@ cat <<SUMMARY
   API health          http://localhost:${MGMT_PORT}/actuator/health
   API metrics         http://localhost:${MGMT_PORT}/actuator/prometheus
   Worker health       http://localhost:${WORKER_MGMT_PORT}/actuator/health
+
+  Grafana             http://localhost:${GRAFANA_PORT:-3000}   (admin password: $SECRETS_DIR/grafana/admin_password)
+  Prometheus          http://localhost:${PROMETHEUS_PORT:-9095}
+  Alertmanager        http://localhost:${ALERTMANAGER_PORT:-9093}
 
   Tear down with: make down
 

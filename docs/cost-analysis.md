@@ -129,13 +129,73 @@ entire budget, which is exactly the trade-off ADR 0004 accepts and records.
 The honest framing is not "Kafka is cheap". It is that a self-hosted single-broker Kafka
 costs one instance size, while the managed equivalent has a three-figure monthly floor.
 
-## 5. Still to be measured
+## 5. What observing it costs
+
+**Method.** The Compose stack with its observability overlay, measured with `podman stats` and
+Prometheus' own `scrape_samples_post_metric_relabeling` after the smoke test and a broker-outage
+drill, so every panel and alert had data to evaluate.
+
+### Memory
+
+| Container | Measured RSS | Limit |
+| --- | ---: | ---: |
+| Grafana | 178 MB | 256 MiB |
+| Alloy | 115 MB | 192 MiB |
+| Tempo | 110 MB | 256 MiB |
+| Loki | 86 MB | 256 MiB |
+| Prometheus | 77 MB | 384 MiB |
+| Alertmanager | 21 MB | 64 MiB |
+| **Total** | **~590 MB** | |
+
+Metrics, logs, traces, alerting and dashboards for the whole system cost roughly half a
+gigabyte — about one API replica. Prometheus is the one to watch as retention fills: its
+figure here is a few hours of data, and the in-cluster limit (512 MiB) is set for thirty days of
+this series count, not for this measurement.
+
+### Series
+
+| Target | Samples per scrape | Budget (`sample_limit`) |
+| --- | ---: | ---: |
+| api | 412 | 1,500 |
+| worker | 543 | 1,200 |
+| gateway | 344 | 1,000 |
+| grafana | 8 (of ~3,700 exported) | — |
+
+The API's figure was **1,025** before this measurement. Micrometer's percentile histogram was
+on for the request timer and published 75 buckets for every route, method and status
+combination — 600 series for the eight combinations one smoke test produces, none of them a
+threshold anything alerted on. Publishing only the six SLO boundaries took the API's scrape
+down by 60%, and the worker's end-to-end timer from 69 buckets to 7. The saving grows with
+every route added: 75 series each, before, and 7 after.
+
+Grafana exports more series about itself than the API and the worker combined. Everything
+except whether it is up, how fast it answers and how much memory it holds is dropped at scrape
+time.
+
+At this scale the monitoring stack's own metrics are the majority of what Prometheus stores —
+Loki, Prometheus, Tempo and Alertmanager together export about 3,700 samples per scrape against
+the application's 1,300. That is the honest shape of a small system: the fixed cost of
+observing it dominates until the application grows into it.
+
+### Traces
+
+Before `OperationalSpanFilter`, 176 of the 198 traces Tempo stored in ten minutes were the
+outbox relay polling every second with nothing to publish, other scheduled tasks, and
+Prometheus and health probes calling the actuator endpoints. After it, over the same kind of
+window, every stored trace was a request or a consumed event. The metrics those spans came
+from are unaffected; only the spans are dropped, at export.
+
+### Against SaaS
+
+The same three signals from a hosted vendor bill per host, per million spans and per gigabyte
+of logs ingested, before retention. Here they cost 590 MB of a node already paid for, a 10 GiB
+and two 5 GiB volumes in the cluster, and object storage for thirty days of log chunks.
+
+## 6. Still to be measured
 
 - Monthly hosting: k3s on a Hetzner ARM node against the managed equivalent (EKS control
   plane, RDS, managed load balancer).
-- Self-hosted Prometheus + Loki + Grafana against a SaaS observability vendor at the same
-  ingest volume.
-- Log volume per request, and what the retention tiers cost at that rate.
+- Log volume per request, and what thirty days of it costs in object storage.
 - Registry storage and egress under the real deploy cadence.
 - Postgres memory under a realistic dataset rather than an empty schema.
 - Kafka page-cache working set under sustained produce load.

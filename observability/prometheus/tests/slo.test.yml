@@ -1,0 +1,153 @@
+# promtool unit tests for slo.yml. Run with `make obs-validate`.
+#
+# Burn-rate alerting is arithmetic across seven windows and three objectives, and a wrong
+# multiplier or a swapped window pair looks entirely plausible in review. These tests pin the
+# behaviour the table in slo.yml promises.
+
+rule_files:
+  - ../rules/slo.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: ten percent of requests failing at the gateway pages
+    interval: 1m
+    input_series:
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="200"}'
+        values: '0+900x60'
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="503"}'
+        values: '0+100x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api-availability
+              service: api
+            exp_annotations:
+              summary: The api-availability error budget is burning fast
+              description: >-
+                10% of events are missing the api-availability
+                objective. At this rate the 30-day error budget is gone within five days.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#errorbudgetburnfast
+      # The slow-burn condition is also true, but held by its 15m `for`. In Alertmanager the
+      # page inhibits it anyway; here the point is that it does not fire early.
+      - eval_time: 10m
+        alertname: ErrorBudgetBurnSlow
+        exp_alerts: []
+    promql_expr_test:
+      # Twenty times the budget's allowed error ratio: overspent by nineteen budgets. Rounded,
+      # because the ratio of two summed rates carries floating-point noise in the 15th digit.
+      - expr: round(slo:error_budget:remaining_ratio{slo="api-availability"}, 0.001)
+        eval_time: 30m
+        exp_samples:
+          - labels: '{slo="api-availability", service="api"}'
+            value: -19
+
+  - name: errors inside the budget do not alert at all
+    interval: 1m
+    input_series:
+      # 0.2% failing, against a 0.5% budget: burning at 0.4x, slower than it refills.
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="200"}'
+        values: '0+998x400'
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="500"}'
+        values: '0+2x400'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: ErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 6h
+        alertname: ErrorBudgetBurnSlow
+        exp_alerts: []
+
+  - name: client errors are not the service failing
+    interval: 1m
+    input_series:
+      # A burst of 404s and 409s is callers being wrong, not the API. Counting them would page
+      # someone because a client shipped a bug.
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="200"}'
+        values: '0+500x60'
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="404"}'
+        values: '0+500x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts: []
+
+  - name: five percent slow raises a ticket but does not page
+    interval: 1m
+    input_series:
+      - series: 'traefik_router_request_duration_seconds_count{router="api@docker", service="api@docker", code="200"}'
+        values: '0+1000x60'
+      - series: 'traefik_router_request_duration_seconds_bucket{router="api@docker", service="api@docker", code="200", le="0.5"}'
+        values: '0+950x60'
+    alert_rule_test:
+      # 5% against a 1% budget is a 5x burn: above the 3x ticket threshold, below the 6x page.
+      - eval_time: 30m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ErrorBudgetBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: api-latency
+              service: api
+            exp_annotations:
+              summary: The api-latency error budget is burning faster than it refills
+              description: >-
+                5% of events are missing the api-latency
+                objective. Not urgent today; the budget runs out before the 30-day window does.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#errorbudgetburnslow
+
+  - name: a stale read model pages through the freshness objective
+    interval: 1m
+    input_series:
+      - series: 'blueprint_events_end_to_end_seconds_count{job="worker", instance="worker-1"}'
+        values: '0+100x30'
+      - series: 'blueprint_events_end_to_end_seconds_bucket{job="worker", instance="worker-1", le="10.0"}'
+        values: '0+80x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: worker-freshness
+              service: worker
+            exp_annotations:
+              summary: The worker-freshness error budget is burning fast
+              description: >-
+                20% of events are missing the worker-freshness
+                objective. At this rate the 30-day error budget is gone within five days.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#errorbudgetburnfast
+
+  - name: the burst stops, and so does the page
+    interval: 1m
+    input_series:
+      # Twenty minutes of 10% failures, then clean. Each long window remembers the burst for
+      # its full length; it is the short window of each pair that clears the alert. The 5m
+      # window forgets within minutes, but the 6x pair's 30m window still sees 6% errors at
+      # minute 35 — so the page holds until that one has also moved past the burst.
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="200"}'
+        values: '0+900x20 18000+1000x60'
+      - series: 'traefik_router_requests_total{router="api@docker", service="api@docker", code="503"}'
+        values: '0+100x20 2000+0x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api-availability
+              service: api
+            exp_annotations:
+              summary: The api-availability error budget is burning fast
+              description: >-
+                10% of events are missing the api-availability
+                objective. At this rate the 30-day error budget is gone within five days.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#errorbudgetburnfast
+      - eval_time: 70m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts: []

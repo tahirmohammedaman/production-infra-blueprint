@@ -1,0 +1,16 @@
+# Dashboards are loaded from files and cannot be edited in the UI. A dashboard someone
+# improved by clicking is a change with no diff, no review and no history, and it disappears
+# the next time the volume does. Edit the JSON under observability/grafana/dashboards instead;
+# Grafana picks it up within 30 seconds.
+
+apiVersion: 1
+
+providers:
+  - name: blueprint
+    folder: Blueprint
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards

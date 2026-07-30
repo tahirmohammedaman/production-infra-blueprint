@@ -5,6 +5,9 @@
 #
 #   prometheus    scrape configuration and every rule file, then the rule unit tests
 #   alertmanager  configuration, then the routing tree against the routes it promises
+#   loki, tempo   configuration verification by the binary itself
+#   alloy         validation, and canonical formatting
+#   grafana       every dashboard parses, has a unique uid, and uses only provisioned datasources
 #
 # This is both `make obs-validate` and the `observability` job in CI.
 
@@ -23,7 +26,10 @@ image_of() {
 
 PROMETHEUS=$(image_of prometheus)
 ALERTMANAGER=$(image_of alertmanager)
-for image in "$PROMETHEUS" "$ALERTMANAGER"; do
+LOKI=$(image_of loki)
+TEMPO=$(image_of tempo)
+ALLOY=$(image_of alloy)
+for image in "$PROMETHEUS" "$ALERTMANAGER" "$LOKI" "$TEMPO" "$ALLOY"; do
   [ -n "$image" ] || die "could not read every image from $OVERLAY"
 done
 
@@ -46,6 +52,10 @@ promtool() {
 amtool() {
   "$CONTAINER" run --rm -v "$OBS/alertmanager:/etc/alertmanager:ro,z" \
     --entrypoint /bin/amtool "$ALERTMANAGER" "$@"
+}
+
+alloy() {
+  "$CONTAINER" run --rm -v "$OBS/alloy:/etc/alloy:ro,z" "$ALLOY" "$@"
 }
 
 log "prometheus: scrape configuration and rule files"
@@ -78,5 +88,48 @@ assert_route pager           env=prod severity=page
 assert_route chat            env=prod severity=ticket
 assert_route deadmans-switch env=prod severity=none alertname=Watchdog
 assert_route blackhole       env=prod severity=none
+
+log "loki: configuration"
+quietly "$CONTAINER" run --rm -v "$OBS/loki:/etc/loki:ro,z" "$LOKI" \
+  -config.file=/etc/loki/loki.yml -verify-config \
+  || die "loki rejected observability/loki/loki.yml"
+ok "configuration is valid"
+
+log "tempo: configuration"
+quietly "$CONTAINER" run --rm -v "$OBS/tempo:/etc/tempo:ro,z" "$TEMPO" \
+  -config.file=/etc/tempo/tempo.yml -config.verify=true \
+  || die "tempo rejected observability/tempo/tempo.yml"
+ok "configuration is valid"
+
+log "alloy: configuration and formatting"
+quietly alloy validate /etc/alloy/config.alloy \
+  || die "alloy rejected observability/alloy/config.alloy"
+for file in observability/alloy/*.alloy; do
+  # `alloy fmt` is the canonical form, the way gofmt is for Go: a diff here is a formatting
+  # change someone forgot to run, not a matter of taste.
+  alloy fmt "/etc/alloy/$(basename "$file")" | diff -u "$file" - >/dev/null \
+    || die "$file is not in canonical form; format it with 'alloy fmt'"
+done
+ok "valid and canonically formatted"
+
+log "grafana: dashboards"
+command -v jq >/dev/null || die "jq is required"
+provisioned=$(sed -n 's/^    uid: //p' observability/grafana/provisioning/datasources/datasources.yml | jq -R . | jq -sc .)
+uids=()
+for dashboard in observability/grafana/dashboards/*.json; do
+  jq -e . "$dashboard" >/dev/null 2>&1 || die "$dashboard is not valid JSON"
+  uid=$(jq -r '.uid // empty' "$dashboard")
+  [ -n "$uid" ] || die "$dashboard has no uid, so every reload would create a new copy"
+  # Every datasource must be one Grafana was provisioned with, or the panel renders "datasource
+  # not found" — a failure that only shows up when someone opens the dashboard mid-incident.
+  unknown=$(jq -r --argjson known "$provisioned" '
+    [.. | objects | select(has("datasource")) | .datasource | objects | .uid // empty]
+    | unique | map(select(. as $u | ($known + ["-- Grafana --"]) | index($u) | not)) | .[]' "$dashboard")
+  [ -z "$unknown" ] || die "$dashboard uses datasources that are not provisioned: $unknown"
+  uids+=("$uid")
+done
+duplicates=$(printf '%s\n' "${uids[@]}" | sort | uniq -d)
+[ -z "$duplicates" ] || die "dashboard uid used more than once: $duplicates"
+ok "${#uids[@]} dashboards parse, have unique uids and use only provisioned datasources"
 
 printf '\n%sobservability configuration is valid%s\n' "$GREEN" "$RESET"

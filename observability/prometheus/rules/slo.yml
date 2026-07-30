@@ -1,0 +1,182 @@
+# Service level objectives, and the alerts that fire when one is threatened.
+#
+# Three objectives, each over a rolling 30 days:
+#
+#   api-availability   99.5% of requests routed to the API do not fail with a 5xx
+#   api-latency        99% of requests routed to the API complete within 500 ms
+#   worker-freshness   99% of events reach the read model within 10 s of their commit
+#
+# Why these numbers, and what happens when a budget runs out, is in docs/slo.md. This file is
+# the executable half.
+#
+# The API is measured at the gateway, not in the API. A request the gateway answers itself —
+# 503 because no replica is ready, 504 because one stopped mid-request — never reaches the
+# application's metrics, so an SLI built from them reports 100% through a total outage. The
+# router metrics count every request that matched the API's route, whoever answered it. The
+# selector names the router's service in both environments: `api@docker` from the Compose
+# labels, `blueprint-api-<port>@kubernetes` from the Ingress.
+#
+# Alerting is the multi-window, multi-burn-rate scheme from the Google SRE Workbook, ch. 5. A
+# burn rate of 1 spends exactly the 30-day budget in 30 days; 14.4 spends 2% of it in an hour.
+# Each condition needs a long window (is it significant?) and a short one (is it still
+# happening?), so an alert fires within minutes of a real problem and clears within minutes of
+# the fix, rather than lingering for the length of the long window.
+#
+#   severity  burn rate  long window  short window  budget spent when it fires
+#   page        14.4x        1h           5m                2%
+#   page          6x         6h          30m                5%
+#   ticket        3x         1d           2h               10%
+#   ticket        1x         3d           6h               10%
+#
+# Adding an objective is three rules — its target, its bad events and its total events. The
+# window, budget and alert rules below are written over every `slo` at once.
+
+groups:
+  - name: blueprint.slo.objectives
+    rules:
+      - record: slo:objective:ratio
+        expr: vector(0.995)
+        labels:
+          slo: api-availability
+          service: api
+
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: api-latency
+          service: api
+
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: worker-freshness
+          service: worker
+
+  # Bad and total events per second, each over 5 minutes. Every longer window is derived from
+  # these, so the selectors exist exactly once.
+  - name: blueprint.slo.events
+    rules:
+      - record: slo:sli_errors:rate5m
+        expr: |
+          sum(rate(traefik_router_requests_total{service=~"api@docker|blueprint-api-.+@kubernetes", code=~"5.."}[5m]))
+        labels:
+          slo: api-availability
+          service: api
+      - record: slo:sli_total:rate5m
+        expr: |
+          sum(rate(traefik_router_requests_total{service=~"api@docker|blueprint-api-.+@kubernetes"}[5m]))
+        labels:
+          slo: api-availability
+          service: api
+
+      # Slow is everything not in the 500 ms bucket. Traefik's buckets are configured to
+      # include 0.5 exactly, so this is a count, not an interpolation.
+      - record: slo:sli_errors:rate5m
+        expr: |
+          sum(rate(traefik_router_request_duration_seconds_count{service=~"api@docker|blueprint-api-.+@kubernetes"}[5m]))
+            -
+          sum(rate(traefik_router_request_duration_seconds_bucket{service=~"api@docker|blueprint-api-.+@kubernetes", le="0.5"}[5m]))
+        labels:
+          slo: api-latency
+          service: api
+      - record: slo:sli_total:rate5m
+        expr: |
+          sum(rate(traefik_router_request_duration_seconds_count{service=~"api@docker|blueprint-api-.+@kubernetes"}[5m]))
+        labels:
+          slo: api-latency
+          service: api
+
+      # Measured from the originating transaction's commit, so outbox relay delay counts
+      # against the objective. Events that never arrive are not counted here at all — that
+      # is what WorkerDown and OutboxRelayStalled in alerts.yml are for.
+      - record: slo:sli_errors:rate5m
+        expr: |
+          sum(rate(blueprint_events_end_to_end_seconds_count{job="worker"}[5m]))
+            -
+          sum(rate(blueprint_events_end_to_end_seconds_bucket{job="worker", le="10.0"}[5m]))
+        labels:
+          slo: worker-freshness
+          service: worker
+      - record: slo:sli_total:rate5m
+        expr: |
+          sum(rate(blueprint_events_end_to_end_seconds_count{job="worker"}[5m]))
+        labels:
+          slo: worker-freshness
+          service: worker
+
+  # Error ratio over each alerting window. A ratio of summed rates, not an average of ratios:
+  # averaging would weight a quiet minute the same as a busy one.
+  - name: blueprint.slo.windows
+    rules:
+      - record: slo:sli_error:ratio_rate5m
+        expr: slo:sli_errors:rate5m / slo:sli_total:rate5m
+      - record: slo:sli_error:ratio_rate30m
+        expr: sum_over_time(slo:sli_errors:rate5m[30m]) / sum_over_time(slo:sli_total:rate5m[30m])
+      - record: slo:sli_error:ratio_rate1h
+        expr: sum_over_time(slo:sli_errors:rate5m[1h]) / sum_over_time(slo:sli_total:rate5m[1h])
+      - record: slo:sli_error:ratio_rate2h
+        expr: sum_over_time(slo:sli_errors:rate5m[2h]) / sum_over_time(slo:sli_total:rate5m[2h])
+      - record: slo:sli_error:ratio_rate6h
+        expr: sum_over_time(slo:sli_errors:rate5m[6h]) / sum_over_time(slo:sli_total:rate5m[6h])
+      - record: slo:sli_error:ratio_rate1d
+        expr: sum_over_time(slo:sli_errors:rate5m[1d]) / sum_over_time(slo:sli_total:rate5m[1d])
+      - record: slo:sli_error:ratio_rate3d
+        expr: sum_over_time(slo:sli_errors:rate5m[3d]) / sum_over_time(slo:sli_total:rate5m[3d])
+
+  # What the dashboard shows: how much of the 30-day budget is left. 1 is untouched, 0 is spent,
+  # negative is overspent.
+  - name: blueprint.slo.budget
+    interval: 5m
+    rules:
+      - record: slo:sli_error:ratio_rate30d
+        expr: sum_over_time(slo:sli_errors:rate5m[30d]) / sum_over_time(slo:sli_total:rate5m[30d])
+      - record: slo:error_budget:remaining_ratio
+        expr: 1 - slo:sli_error:ratio_rate30d / on (slo, service) (1 - slo:objective:ratio)
+
+  - name: blueprint.slo.alerts
+    rules:
+      - alert: ErrorBudgetBurnFast
+        expr: |
+          (
+              slo:sli_error:ratio_rate1h  > on (slo, service) (14.4 * (1 - slo:objective:ratio))
+            and
+              slo:sli_error:ratio_rate5m  > on (slo, service) (14.4 * (1 - slo:objective:ratio))
+          )
+          or
+          (
+              slo:sli_error:ratio_rate6h  > on (slo, service) (6 * (1 - slo:objective:ratio))
+            and
+              slo:sli_error:ratio_rate30m > on (slo, service) (6 * (1 - slo:objective:ratio))
+          )
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 'The {{ $labels.slo }} error budget is burning fast'
+          description: >-
+            {{ $value | humanizePercentage }} of events are missing the {{ $labels.slo }}
+            objective. At this rate the 30-day error budget is gone within five days.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#errorbudgetburnfast
+
+      - alert: ErrorBudgetBurnSlow
+        expr: |
+          (
+              slo:sli_error:ratio_rate1d  > on (slo, service) (3 * (1 - slo:objective:ratio))
+            and
+              slo:sli_error:ratio_rate2h  > on (slo, service) (3 * (1 - slo:objective:ratio))
+          )
+          or
+          (
+              slo:sli_error:ratio_rate3d  > on (slo, service) (1 * (1 - slo:objective:ratio))
+            and
+              slo:sli_error:ratio_rate6h  > on (slo, service) (1 * (1 - slo:objective:ratio))
+          )
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'The {{ $labels.slo }} error budget is burning faster than it refills'
+          description: >-
+            {{ $value | humanizePercentage }} of events are missing the {{ $labels.slo }}
+            objective. Not urgent today; the budget runs out before the 30-day window does.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#errorbudgetburnslow

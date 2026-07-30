@@ -1,0 +1,74 @@
+# Grafana datasources, provisioned. One file for both environments: the URLs come from the
+# environment (`$PROMETHEUS_URL` and friends), which Compose and the Grafana HelmRelease each
+# set to their own service names. `$$` is a literal dollar sign in this file.
+#
+# The three signals are wired to each other, which is most of the value of having all three:
+#
+#   metric → trace   exemplars on the latency histogram carry a trace id
+#   log → trace      the traceId field in every structured log line links to Tempo
+#   trace → logs     a span opens the logs for the same trace id, in the service that emitted it
+#
+# UIDs are fixed so dashboards can reference a datasource without caring what it is named.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: $PROMETHEUS_URL
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      prometheusType: Prometheus
+      timeInterval: 15s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: $LOKI_URL
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - name: traceId
+          matcherType: regex
+          matcherRegex: '"traceId":"(\w+)"'
+          datasourceUid: tempo
+          url: '$${__value.raw}'
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: $TEMPO_URL
+    editable: false
+    jsonData:
+      nodeGraph:
+        enabled: true
+      lokiSearch:
+        datasourceUid: loki
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        customQuery: true
+        # trace_id is structured metadata, not a label (see the label budget in loki.yml), so
+        # it is a filter after the stream selector rather than part of it.
+        query: '{service_name=~"api|worker"} | trace_id="$${__trace.traceId}"'
+
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: $ALERTMANAGER_URL
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

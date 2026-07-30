@@ -54,6 +54,8 @@ into Redis, and back out of the API's read endpoint.
 | Gateway dashboard | http://localhost:8081/dashboard/ |
 | API health / metrics | http://localhost:9090/actuator/health |
 | Worker health / metrics | http://localhost:9091/actuator/health |
+| Grafana | http://localhost:3000 — dashboards, logs and traces, read-only without a login |
+| Prometheus / Alertmanager | http://localhost:9095, http://localhost:9093 |
 
 Run `make help` for every available target, and `make doctor` to see which container
 runtime and compose implementation it found. Docker and rootless podman are both supported.
@@ -106,6 +108,36 @@ specifically — `cosign verify` without `--certificate-identity` passes for any
 by any GitHub Actions workflow anywhere, which looks like a control and is not one. See
 `docs/adr/0008-supply-chain-pinned-signed-and-attested.md`.
 
+## Observability
+
+Nothing here pages because a number crossed a line. It pages when users are affected, or when
+a failure would otherwise be invisible.
+
+- **Three objectives.** Availability and latency are measured at the gateway, which is the only
+  place a request that never reached the API is counted. Freshness of the read model is
+  measured from the transaction commit, not the Kafka publish. Each has multi-window,
+  multi-burn-rate alerts. `docs/slo.md` explains every number.
+- **Nineteen alerts, two severities, each with a promtool unit test** and a section in
+  `docs/runbooks/alerts.md`. A test covers when an alert must fire and, just as important,
+  when it must not.
+- **Signals that link to each other.** A latency exemplar opens a trace. A log line's trace id
+  opens the trace. A span opens the logs for the same request.
+- **Budgets that fail loudly when exceeded.** Each is enforced in configuration, not written in
+  a doc:
+  - a series limit per scrape target;
+  - a label limit per log stream;
+  - histograms that publish only the SLO thresholds;
+  - scheduled-task and probe spans dropped before export.
+
+  `docs/cost-analysis.md` has what they saved.
+
+One set of files serves both environments. Compose mounts them, and the cluster receives them as
+ConfigMaps. See `observability/README.md`.
+
+```bash
+make obs-validate   # every config through its own binary, alert unit tests, the routing tree
+```
+
 ## Deployment
 
 CI never touches the cluster. Its last act is publishing a signed image; Flux, running
@@ -152,6 +184,8 @@ make flux-status      # what the cluster thinks it is running
 - **`services/api/src/main/java/dev/tahir/blueprint/outbox/`** — the transactional outbox,
   the reason a broker outage cannot corrupt state or take the API down.
 - **`scripts/smoke-test.sh`** — what "working" is defined as, in executable form.
+- **`docs/slo.md` and `observability/prometheus/tests/`** — three objectives, the reasoning
+  behind each number, and unit tests showing when every alert fires and when it stays quiet.
 - **`.semgrep/blueprint.yml`** — four rules that encode invariants this system depends on.
   Three of them were defects here before they were rules.
 
