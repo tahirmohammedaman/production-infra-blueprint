@@ -243,7 +243,9 @@ KUSTOMIZATIONS := \
 	deploy/k8s/overlays/prod \
 	deploy/k8s/overlays/dev \
 	deploy/k8s/infrastructure/controllers \
-	deploy/k8s/infrastructure/configs
+	deploy/k8s/infrastructure/configs \
+	deploy/k8s/infrastructure/observability \
+	observability
 
 KUSTOMIZE_IMAGE  := registry.k8s.io/kustomize/kustomize@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429
 KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform@sha256:5103f6f5e89061728aad4ad5a250627dd0fc9b2a92eb876f3762677a4222f9e0

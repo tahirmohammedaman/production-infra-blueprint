@@ -17,7 +17,7 @@ metadata:
   name: blueprint-api
   namespace: flux-system
 spec:
-  image: ghcr.io/tahir/blueprint-api
+  image: ghcr.io/tahirmohammedaman/blueprint-api
   interval: 5m
   secretRef:
     name: ghcr-credentials
@@ -28,7 +28,7 @@ metadata:
   name: blueprint-worker
   namespace: flux-system
 spec:
-  image: ghcr.io/tahir/blueprint-worker
+  image: ghcr.io/tahirmohammedaman/blueprint-worker
   interval: 5m
   secretRef:
     name: ghcr-credentials

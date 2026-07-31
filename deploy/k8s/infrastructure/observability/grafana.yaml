@@ -1,0 +1,86 @@
+# Grafana, provisioned entirely from git and holding no state of its own.
+#
+# Datasources are observability/grafana/provisioning/datasources/datasources.yml — the Compose
+# file — with the URLs supplied here. Dashboards are the `grafana-dashboards` ConfigMap, found
+# by the chart's sidecar through its label. The admin password is a SOPS-encrypted Secret.
+# Nothing else exists, so there is no volume: a Grafana pod lost is a Grafana pod recreated
+# identically, and there is nothing to back up.
+#
+# Not exposed through the ingress. It is reached with `kubectl port-forward` by someone who
+# already has cluster credentials, which is a smaller attack surface than any login page.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: grafana
+      # 12.10 ships Grafana 13.1.1, the version the Compose stack runs.
+      version: "12.10.x"
+      sourceRef:
+        kind: HelmRepository
+        name: grafana-community
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  values:
+    admin:
+      existingSecret: grafana-admin
+      userKey: admin-user
+      passwordKey: admin-password
+
+    env:
+      PROMETHEUS_URL: http://prometheus-server.monitoring.svc
+      LOKI_URL: http://loki.monitoring.svc:3100
+      TEMPO_URL: http://tempo.monitoring.svc:3200
+      ALERTMANAGER_URL: http://prometheus-alertmanager.monitoring.svc:9093
+
+    extraConfigmapMounts:
+      - name: blueprint-datasources
+        configMap: grafana-datasources
+        mountPath: /etc/grafana/provisioning/datasources
+        readOnly: true
+
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: monitoring
+        provider:
+          folder: Blueprint
+          disableDelete: true
+          allowUiUpdates: false
+
+    grafana.ini:
+      analytics:
+        reporting_enabled: false
+        check_for_updates: false
+        check_for_plugin_updates: false
+      news:
+        news_feed_enabled: false
+      plugins:
+        # Grafana 13 downloads the datasource plugins it stopped bundling at every start. None
+        # is used here, and a runtime that fetches code on boot is not one this cluster wants.
+        preinstall_disabled: true
+      dashboards:
+        default_home_dashboard_path: /tmp/dashboards/blueprint-overview.json
+
+    persistence:
+      enabled: false
+
+    resources:
+      requests:
+        cpu: 20m
+        memory: 128Mi
+      limits:
+        memory: 256Mi

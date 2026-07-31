@@ -1,0 +1,26 @@
+# Encrypted with SOPS; see .sops.yaml. Generated rather than issued by anyone, so unlike the
+# Alertmanager receiver and object-storage credentials it can live in the repository.
+apiVersion: v1
+kind: Secret
+metadata:
+    name: grafana-admin
+    namespace: monitoring
+type: Opaque
+stringData:
+    admin-user: ENC[AES256_GCM,data:EPw+R1E=,iv:mGQ6OB17esMp3Gx84tJCEUD91xBWrp4peyWQsqfaiBI=,tag:9CXvRt+av6K6eK3kVaWbEg==,type:str]
+    admin-password: ENC[AES256_GCM,data:1oRjbArcUQsY/xmbITrmbsJ54wcdqdq6CWmfwHyVMTE=,iv:Dgwi9kbVpY4E6+o5LbGqzzO6GGAKwJkTb7Io7ZwRyDI=,tag:zHnarhGRtjQGXfGhll89hQ==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBuUnptSjNySURwbzNRbGxD
+            cmVSZXlyZFBhNmdiMGZPY0lGKzFSZ0YyN1hZCm9FSkpMZEpjVmpqRWlvQi9jeTFK
+            dHJGUGdCR0RjQjl6SXh6RXVYZmNRR1kKLS0tIHRYQ2d5bC9nTFp6YlZJR2tudGp3
+            OEtsVkZlT3BjTWw0b21RdXd4NmxzR3MKaT5aexLwkkFORy53+t7VPjyadG9lVpww
+            jT7K4aVzh88WcpHfm3mBvNn6ZBxSA3p1+7l18reKX/HeeXviJaQovA==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1rsaayan335t5l3l7fy86jelksjvfj6g607myyzx7dw8jjdahpu6q3vnklg
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-09-10T09:13:53Z"
+    mac: ENC[AES256_GCM,data:0xT2+GMfjGHsIQkkxb2o0TzcIOyYZgZHgTFbtbOL9oLrh9KtEMNdR6Y6blU5EwrRMzKneiagzbgMnOZomAA05dqp9BJBNUfM185FFJ/gJU7ZUGgvzDpvNVeXtUc1hOB5YbyYjoRKCvwYznh+fT67UG2Cn320084XhEbPpSTgPk0=,iv:tpdLBFVb2Own4N81sVLVkS7HbTFr5C8J7QIG5R6GoL0=,tag:QthWISG8IN/uZxg80TXbzg==,type:str]
+    version: 3.13.2

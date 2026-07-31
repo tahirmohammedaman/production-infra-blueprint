@@ -1,0 +1,58 @@
+# Grafana Alloy: pod logs to Loki.
+#
+# One replica, not a DaemonSet. It reads logs through the Kubernetes API
+# (observability/alloy/kubernetes.alloy), so it does not need to run on the node whose logs it
+# reads — and on a one-node cluster the difference would be cosmetic anyway. The same property
+# lets it run as a non-root user with a read-only root filesystem and no hostPath mounts.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: alloy
+  namespace: monitoring
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: alloy
+      # 1.11 ships Alloy v1.18.0, the version the Compose stack runs.
+      version: "1.11.x"
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  values:
+    controller:
+      type: deployment
+      replicas: 1
+    alloy:
+      # The `alloy-config` ConfigMap holds both config.alloy and the pipeline.alloy it imports,
+      # and the chart mounts the whole ConfigMap at /etc/alloy.
+      configMap:
+        create: false
+        name: alloy-config
+        key: config.alloy
+      enableReporting: false
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          memory: 192Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 473
+        runAsGroup: 473
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault

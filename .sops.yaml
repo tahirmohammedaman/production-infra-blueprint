@@ -13,11 +13,11 @@
 # until the missing Secret is referenced at apply time.
 #
 # Rotate a secret:
-#   sops deploy/k8s/overlays/prod/app-secrets.enc.yaml   # edits decrypted, saves encrypted
+#   sops deploy/k8s/config/prod/app-secrets.enc.yaml   # edits decrypted, saves encrypted
 #   git commit -am "chore(sec): rotate the database password"
 # Flux applies it within a minute. Nothing else has to happen.
 
 creation_rules:
-  - path_regex: deploy/k8s/overlays/.*\.enc\.ya?ml$
+  - path_regex: deploy/k8s/.*\.enc\.ya?ml$
     encrypted_regex: '^(data|stringData)$'
     age: age1rsaayan335t5l3l7fy86jelksjvfj6g607myyzx7dw8jjdahpu6q3vnklg

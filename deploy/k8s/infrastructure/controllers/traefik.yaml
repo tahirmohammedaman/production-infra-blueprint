@@ -79,6 +79,16 @@ spec:
     metrics:
       prometheus:
         entryPoint: metrics
+        # The availability and latency SLOs are measured on router metrics, with buckets at
+        # the objective's thresholds. See observability/prometheus/rules/slo.yml.
+        addRoutersLabels: true
+        buckets: "0.05,0.1,0.25,0.5,1,2,5"
+    providers:
+      kubernetesIngress:
+        # Keep the route when its Service has no ready endpoints, and answer 503. The default
+        # drops the route, so a total API outage is served as a 404 — indistinguishable from
+        # a mistyped URL, excluded from the error budget as a client error, and never paged.
+        allowEmptyServices: true
     resources:
       requests:
         cpu: 50m

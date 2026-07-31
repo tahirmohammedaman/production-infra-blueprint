@@ -61,7 +61,11 @@ alloy() {
 log "prometheus: scrape configuration and rule files"
 quietly promtool check config /etc/prometheus/prometheus.yml \
   || die "promtool rejected the Prometheus configuration or a rule file"
-ok "configuration and every rule file parse"
+# Syntax only: the in-cluster file names the pod's service-account token, which exists in a
+# pod and nowhere else. Its rule files are the ones checked above.
+quietly promtool check config --syntax-only /etc/prometheus/kubernetes.yml \
+  || die "promtool rejected observability/prometheus/kubernetes.yml"
+ok "both configurations and every rule file parse"
 
 log "prometheus: rule unit tests"
 quietly promtool test rules alerts.test.yml slo.test.yml \
@@ -102,8 +106,10 @@ quietly "$CONTAINER" run --rm -v "$OBS/tempo:/etc/tempo:ro,z" "$TEMPO" \
 ok "configuration is valid"
 
 log "alloy: configuration and formatting"
-quietly alloy validate /etc/alloy/config.alloy \
-  || die "alloy rejected observability/alloy/config.alloy"
+for config in config.alloy kubernetes.alloy; do
+  quietly alloy validate "/etc/alloy/$config" \
+    || die "alloy rejected observability/alloy/$config"
+done
 for file in observability/alloy/*.alloy; do
   # `alloy fmt` is the canonical form, the way gofmt is for Go: a diff here is a formatting
   # change someone forgot to run, not a matter of taste.

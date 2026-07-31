@@ -11,5 +11,5 @@ resources:
 
 images:
   - name: ghcr.io/OWNER/blueprint-api
-    newName: ghcr.io/tahir/blueprint-api
+    newName: ghcr.io/tahirmohammedaman/blueprint-api
     newTag: latest # {"$imagepolicy": "flux-system:blueprint-api:tag"}

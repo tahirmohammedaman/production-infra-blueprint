@@ -1,0 +1,112 @@
+# Prometheus and Alertmanager.
+#
+# The chart would render a prometheus.yml from values; instead it mounts the `prometheus-config`
+# ConfigMap — observability/prometheus/kubernetes.yml plus the three rule files the Compose
+# stack loads — and its config reloader applies a changed rule within a minute of Flux applying
+# the commit. Alertmanager does the same with observability/alertmanager/alertmanager.yml.
+#
+# The chart's three companion exporters are switched off. kube-state-metrics, node-exporter
+# and the pushgateway each add hundreds to thousands of series that no rule or dashboard here
+# reads; container memory and CPU come from the kubelet instead, through four kept series.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: prometheus
+      # 29.19 ships Prometheus v3.13.1, the version the Compose stack runs. Renovate moves both.
+      version: "29.19.x"
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  values:
+    kube-state-metrics:
+      enabled: false
+    prometheus-node-exporter:
+      enabled: false
+    prometheus-pushgateway:
+      enabled: false
+
+    server:
+      # Mounts `prometheus-config` in place of a rendered config; see observability/kustomization.yaml.
+      configMapOverrideName: config
+      # Thirty days, because the error-budget recording rules look back thirty days. Shorter
+      # retention and slo:sli_error:ratio_rate30d silently becomes a shorter window.
+      retention: 30d
+      extraFlags:
+        - web.enable-lifecycle
+        - enable-feature=exemplar-storage,extra-scrape-metrics
+      persistentVolume:
+        enabled: true
+        size: 10Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containerSecurityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+
+    alertmanager:
+      enabled: true
+      # Not rendered from values: the file in observability/alertmanager is mounted instead,
+      # and its reloader watches the directory it is mounted in.
+      config:
+        enabled: false
+      extraVolumes:
+        - name: blueprint-config
+          configMap:
+            name: alertmanager-config
+      extraVolumeMounts:
+        - name: blueprint-config
+          mountPath: /etc/alertmanager
+          readOnly: true
+      # Receiver credentials, read by alertmanager.yml through *_file settings. Created by hand;
+      # see deploy/k8s/README.md. The pod does not start without it, which is the intent: an
+      # Alertmanager that cannot notify anyone should fail loudly, not run quietly.
+      extraSecretMounts:
+        - name: receivers
+          mountPath: /etc/alertmanager-receivers
+          secretName: alertmanager-receivers
+          readOnly: true
+      configmapReload:
+        enabled: true
+        extraArgs:
+          watched-dir: /etc/alertmanager
+        extraVolumeMounts:
+          - name: blueprint-config
+            mountPath: /etc/alertmanager
+            readOnly: true
+      persistence:
+        enabled: true
+        size: 1Gi
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 64Mi

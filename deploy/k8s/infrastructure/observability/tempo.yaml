@@ -1,0 +1,59 @@
+# Tempo, receiving OTLP over HTTP from both services on the port their NetworkPolicy allows
+# (4318), keeping three days of traces on a local volume.
+#
+# Traces are kept locally rather than in object storage. They are sampled at 10%, stripped of
+# scheduled-task and probe spans before export (OperationalSpanFilter), and useful for days,
+# not weeks; the logs, which carry the same trace id, are the 30-day record.
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: tempo
+  namespace: monitoring
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: tempo
+      # 2.2 ships Tempo 2.10.7, the version the Compose stack runs.
+      version: "2.2.x"
+      sourceRef:
+        kind: HelmRepository
+        name: grafana-community
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  values:
+    tempo:
+      # The chart reserves a 1 GiB memory ballast by default — an eighth of this node, held
+      # to smooth garbage collection for a trace volume several orders of magnitude larger
+      # than this one.
+      memBallastSizeMbs: 0
+      reportingEnabled: false
+      streamOverHttpEnabled: true
+      retention: 72h
+      ingester:
+        max_block_duration: 5m
+      # The chart's receiver defaults stay. Its Service template is generated from the receiver
+      # list and dereferences the Jaeger entries unconditionally, so nulling them out fails the
+      # render — tried, and it does. What limits exposure is the NetworkPolicy on the sending
+      # side: pods in `blueprint` may reach this namespace on 4318 and on no other port.
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 384Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+    persistence:
+      enabled: true
+      size: 5Gi

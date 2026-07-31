@@ -14,8 +14,8 @@
 #   3. An SPDX SBOM is attached, so what is inside the image can be answered six months
 #      from now without rebuilding it.
 #
-#   scripts/verify-image.sh ghcr.io/tahir/blueprint-api:latest
-#   scripts/verify-image.sh ghcr.io/tahir/blueprint-api@sha256:abc...
+#   scripts/verify-image.sh ghcr.io/tahirmohammedaman/blueprint-api:latest
+#   scripts/verify-image.sh ghcr.io/tahirmohammedaman/blueprint-api@sha256:abc...
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

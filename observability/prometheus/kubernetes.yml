@@ -1,0 +1,185 @@
+# Prometheus in the cluster.
+#
+# The rule files are the ones the Compose stack loads, mounted from the same ConfigMap as this
+# file (observability/kustomization.yaml). What differs from prometheus.yml is how targets are
+# found and the `env` label Alertmanager routes on. Job names are identical, because every rule
+# and every dashboard selects on them.
+#
+# Discovery goes through Services and pods, and scrapes only the named ports the
+# NetworkPolicies open to this namespace. The sample limits are the same series budget as
+# locally; see prometheus.yml for why they are enforced rather than documented.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    env: prod
+
+rule_files:
+  - /etc/config/recording.yml
+  - /etc/config/alerts.yml
+  - /etc/config/slo.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [prometheus-alertmanager.monitoring.svc:9093]
+
+scrape_configs:
+  # ------------------------------------------------------------ the application
+  # Production only. The dev overlay runs in its own namespace on the same node, and its
+  # traffic must not count towards — or against — the production objectives.
+  - job_name: api
+    metrics_path: /actuator/prometheus
+    sample_limit: 1500
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [blueprint]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name, __meta_kubernetes_endpoint_port_name]
+        regex: api;management
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  - job_name: worker
+    metrics_path: /actuator/prometheus
+    sample_limit: 1200
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [blueprint]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name, __meta_kubernetes_endpoint_port_name]
+        regex: worker;management
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  # Traefik exposes metrics on its own entrypoint, which is never published by the Service.
+  - job_name: gateway
+    sample_limit: 1000
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [traefik]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+        regex: traefik;metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  - job_name: cert-manager
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [cert-manager]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: cert-manager;9402
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  # Container memory and CPU against their limits: the numbers every request and limit in
+  # deploy/k8s cites, measured where the kernel enforces them. Read through the API server's
+  # node proxy, so the kubelet's certificate is verified against the cluster CA rather than
+  # skipped. Everything cAdvisor exports beyond these four series is dropped at scrape time.
+  - job_name: kubelet-cadvisor
+    scheme: https
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: container_memory_working_set_bytes|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total
+        action: keep
+      # Pod-level and cgroup-root aggregates carry no container label and double every sum.
+      - source_labels: [container]
+        regex: ""
+        action: drop
+
+  # ------------------------------------------------------ the monitoring stack
+  # Selected by chart label and port number rather than port name, which the charts do not
+  # agree on. A log pipeline that silently drops lines and an Alertmanager that cannot deliver
+  # are both failures nothing else would report.
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  - job_name: alertmanager
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: alertmanager;9093
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  - job_name: loki
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: loki;3100
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  - job_name: alloy
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: alloy;12345
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  - job_name: tempo
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: tempo;3200
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  # Same keep-list as locally: Grafana's 3,700 self-describing series are not worth storing.
+  - job_name: grafana
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: grafana;3000
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: grafana_build_info|grafana_http_request_duration_seconds_(count|sum)|process_(resident_memory_bytes|cpu_seconds_total|start_time_seconds)
+        action: keep

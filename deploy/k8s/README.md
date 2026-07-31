@@ -17,6 +17,8 @@ overlays/dev/             a second namespace on the same cluster, one replica, n
 infrastructure/
   controllers/            Traefik and cert-manager as HelmReleases
   configs/                the ACME ClusterIssuers, which need cert-manager's CRDs first
+  observability/          Prometheus, Alertmanager, Loki, Tempo, Alloy and Grafana as
+                          HelmReleases, configured from ../../../observability
 ```
 
 ## Why four kustomizations for production rather than one
@@ -56,6 +58,59 @@ the migration.
   tenant.
 - **The HPA scales on CPU, never memory.** A JVM's RSS rises to fill its heap and does not
   come back down, so a memory-based HPA scales up once and never scales down again.
+
+## Monitoring
+
+The monitoring stack is its own Flux Kustomization, `observability`, and nothing depends on
+it. An application deploy never waits for Grafana to become healthy, and a broken monitoring
+upgrade can never block a fix from reaching production.
+
+Its HelmReleases install the software and nothing else. What the software runs — scrape
+configuration, alert rules, routing, dashboards, the log pipeline — is the same set of files
+the Compose stack mounts, turned into ConfigMaps by `observability/kustomization.yaml`. A rule
+changed in git reaches the running Prometheus through Flux and the chart's config reloader,
+without a restart. See `observability/README.md`.
+
+Every chart pins the same application version the Compose stack runs, so what is tested on a
+laptop is what runs here.
+
+Grafana has no ingress. Reach it with the cluster credentials you already have:
+
+```bash
+kubectl -n monitoring port-forward svc/grafana 3000:80
+```
+
+## Secrets created by hand
+
+Everything this repository can generate is committed, SOPS-encrypted. Four Secrets hold
+credentials issued by someone else, so they are created once per cluster, from files rather
+than `--from-literal` so the values never land in shell history:
+
+```bash
+# The age key Flux decrypts every *.enc.yaml with. Kept in a password manager, never in git.
+kubectl -n flux-system create secret generic sops-age \
+  --from-file=age.agekey=./age.key
+
+# Lets image automation list tags on GHCR: a token with read:packages only.
+kubectl -n flux-system create secret docker-registry ghcr-credentials \
+  --docker-server=ghcr.io --docker-username=<github-user> --docker-password="$(cat ./ghcr-token)"
+
+# Alertmanager's receivers, read through *_file settings in observability/alertmanager.
+kubectl -n monitoring create secret generic alertmanager-receivers \
+  --from-file=slack-webhook-url=./slack-webhook-url \
+  --from-file=pagerduty-routing-key=./pagerduty-routing-key \
+  --from-file=deadmans-switch-url=./deadmans-switch-url
+
+# Object storage for Loki's chunks, in AWS shared-credentials format:
+#   [default]
+#   aws_access_key_id = ...
+#   aws_secret_access_key = ...
+kubectl -n monitoring create secret generic loki-object-storage \
+  --from-file=credentials=./loki-credentials
+```
+
+Alertmanager and Loki do not start until theirs exist. That is deliberate: an Alertmanager that
+cannot notify anyone should be visibly broken, not quietly running.
 
 ## Local checks
 

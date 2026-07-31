@@ -1,0 +1,29 @@
+# Chart sources. Grafana moved its Grafana, Loki and Tempo charts to a community-maintained
+# repository in 2026; Alloy is still published from the original one.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: prometheus-community
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://prometheus-community.github.io/helm-charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: grafana
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://grafana.github.io/helm-charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: grafana-community
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://grafana-community.github.io/helm-charts

@@ -1,0 +1,53 @@
+# What the cluster runs from this directory, as ConfigMaps generated from the same files the
+# Compose stack mounts. A rule, a route, a dashboard or a log pipeline exists exactly once.
+#
+# Applied by deploy/k8s/infrastructure/observability, which adds the HelmReleases that mount
+# these. Names carry no hash suffix because the HelmRelease values have to name them, and
+# every consumer — Prometheus' and Alertmanager's config reloaders, Grafana's dashboard
+# sidecar, Alloy's own watcher — notices a changed ConfigMap by itself, which is the job a
+# hash suffix would otherwise do.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/part-of: blueprint-observability
+
+configMapGenerator:
+  # The Prometheus chart mounts `<release>-<server.configMapOverrideName>` in place of the
+  # config it would otherwise render from values: release `prometheus`, override `config`.
+  - name: prometheus-config
+    files:
+      - prometheus.yml=prometheus/kubernetes.yml
+      - prometheus/rules/recording.yml
+      - prometheus/rules/alerts.yml
+      - prometheus/rules/slo.yml
+
+  - name: alertmanager-config
+    files:
+      - alertmanager/alertmanager.yml
+
+  # Both files under /etc/alloy, where kubernetes.alloy imports pipeline.alloy from.
+  - name: alloy-config
+    files:
+      - config.alloy=alloy/kubernetes.alloy
+      - alloy/pipeline.alloy
+
+  - name: grafana-datasources
+    files:
+      - grafana/provisioning/datasources/datasources.yml
+
+  # Found by the Grafana chart's dashboard sidecar through this label.
+  - name: grafana-dashboards
+    options:
+      labels:
+        grafana_dashboard: "1"
+    files:
+      - grafana/dashboards/blueprint-overview.json
+      - grafana/dashboards/blueprint-async.json
+      - grafana/dashboards/blueprint-slo.json
+      - grafana/dashboards/blueprint-runtime.json

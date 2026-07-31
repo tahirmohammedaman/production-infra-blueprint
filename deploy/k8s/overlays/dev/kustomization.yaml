@@ -28,10 +28,10 @@ secretGenerator:
 
 images:
   - name: ghcr.io/OWNER/blueprint-api
-    newName: ghcr.io/tahir/blueprint-api
+    newName: ghcr.io/tahirmohammedaman/blueprint-api
     newTag: main
   - name: ghcr.io/OWNER/blueprint-worker
-    newName: ghcr.io/tahir/blueprint-worker
+    newName: ghcr.io/tahirmohammedaman/blueprint-worker
     newTag: main
 
 patches:

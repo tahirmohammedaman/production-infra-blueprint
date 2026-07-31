@@ -1,0 +1,25 @@
+# The monitoring stack, reconciled by the `observability` Flux Kustomization.
+#
+# The HelmReleases here install the software; what it runs — scrape configuration, rules,
+# routing, dashboards, the log pipeline — comes from ../../../../observability as ConfigMaps,
+# built from the same files the Compose stack mounts. Nothing is written twice.
+#
+# Two Secrets are prerequisites created by hand, like `sops-age` and `ghcr-credentials`,
+# because they hold credentials issued by someone else: `alertmanager-receivers` and
+# `loki-object-storage`. deploy/k8s/README.md has the commands. The Grafana admin password is
+# generated, so it is committed here, encrypted.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - ../../../../observability
+  - repositories.yaml
+  - grafana-admin.enc.yaml
+  - prometheus.yaml
+  - loki.yaml
+  - tempo.yaml
+  - alloy.yaml
+  - grafana.yaml

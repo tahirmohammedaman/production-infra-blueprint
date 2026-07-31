@@ -81,6 +81,12 @@ spec:
             # Migrations are applied by a Job before this rolls; see migration/job.yaml.
             - name: SPRING_FLYWAY_ENABLED
               value: "false"
+            # Without these the exporter targets its default, localhost:4318, and logs a
+            # failed export every few seconds for as long as the pod runs.
+            - name: OTLP_ENDPOINT
+              value: http://tempo.monitoring.svc:4318/v1/traces
+            - name: OTLP_EXPORT_ENABLED
+              value: "true"
 
           resources:
             # Sized from measurement, not from a round number: 433 MB steady-state RSS under

@@ -1,0 +1,80 @@
+// Grafana Alloy in the cluster: pod logs in, Loki out.
+//
+// Discovery is the only Kubernetes-specific part. Everything a line goes through after it is
+// found lives in pipeline.alloy, the same file the Compose stack imports.
+//
+// Logs are read through the Kubernetes API rather than from /var/log on the node. On a one-node
+// cluster that costs a little API-server traffic, and it saves Alloy a hostPath mount and root
+// on the node — the trade a restricted namespace should make.
+
+logging {
+	level  = "warn"
+	format = "logfmt"
+}
+
+import.file "blueprint" {
+	filename = "/etc/alloy/pipeline.alloy"
+}
+
+discovery.kubernetes "pods" {
+	role = "pod"
+}
+
+discovery.relabel "pods" {
+	targets = discovery.kubernetes.pods.targets
+
+	// A completed Job's pod has nothing left to read.
+	rule {
+		source_labels = ["__meta_kubernetes_pod_phase"]
+		regex         = "Succeeded|Failed"
+		action        = "drop"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_namespace"]
+		target_label  = "namespace"
+	}
+
+	// The same name the Prometheus job and the Compose service use, so one name finds a
+	// service in all three signals.
+	rule {
+		source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+		target_label  = "service_name"
+	}
+
+	// Pods without the recommended label fall back to their container name.
+	rule {
+		source_labels = ["service_name", "__meta_kubernetes_pod_container_name"]
+		regex         = ";(.+)"
+		target_label  = "service_name"
+	}
+
+	// Traefik is `gateway` everywhere else in this repository: the Compose service, the
+	// Prometheus job, the dashboards' log queries.
+	rule {
+		source_labels = ["service_name"]
+		regex         = "traefik"
+		replacement   = "gateway"
+		target_label  = "service_name"
+	}
+}
+
+loki.source.kubernetes "pods" {
+	targets    = discovery.relabel.pods.output
+	forward_to = [blueprint.structured_logs.default.receiver]
+}
+
+blueprint.structured_logs "default" {
+	forward_to = [loki.write.cluster.receiver]
+}
+
+// env, namespace, service_name and level: four labels, exactly the budget Loki enforces.
+loki.write "cluster" {
+	endpoint {
+		url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
+	}
+
+	external_labels = {
+		env = "prod",
+	}
+}
