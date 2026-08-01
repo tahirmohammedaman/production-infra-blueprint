@@ -128,6 +128,23 @@ spec:
             periodSeconds: 5
             failureThreshold: 3
 
+          lifecycle:
+            # A terminating pod leaves the Service's endpoints at once, so no new connection
+            # reaches it. Existing ones keep coming: the gateway and every other client reuse
+            # keep-alive connections until the server closes them, and a close that crosses a
+            # request on the wire fails that request. A pause alone (the native `sleep` action
+            # this used to be) does nothing about those connections — the zero-downtime drill
+            # still lost POSTs with it, one of 6,000 on a gentle run.
+            #
+            # The hook starts draining instead: for blueprint.shutdown.drain-period every
+            # response says `Connection: close`, each client moves its connection to a pod that
+            # is staying, and only then does SIGTERM arrive. An httpGet hook because the image
+            # has no shell for an exec one; see ConnectionDrain in the platform module.
+            preStop:
+              httpGet:
+                path: /actuator/drain
+                port: management
+
           volumeMounts:
             - name: secrets
               mountPath: /run/secrets

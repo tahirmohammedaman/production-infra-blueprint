@@ -134,6 +134,7 @@ is visible to a schema; all of them are visible to a pod.
 | Kafka shut down in a loop in the dev namespace | Its DNS names hard-coded `blueprint`; valid YAML, wrong everywhere else | namespace-independent short names |
 | The worker crashed at startup whenever the broker was not yet ready | A headless Service has no DNS record until its pod is Ready | ClusterIP for bootstrap, headless only for identity |
 | Kafka was restarted four times during a load test while it was only slow | Its liveness probe started a JVM per check and timed out on a busy node | liveness is a TCP check; readiness keeps the real one |
+| POSTs failed during rollouts | Clients keep reusing keep-alive connections after the pod leaves the endpoints, and a pause before SIGTERM does nothing about them | the preStop hook drains: `Connection: close` for 5s, then SIGTERM — 4 failed requests in 11,972 to 0 in 11,970 under identical load (`make drill`) |
 
 ## Local checks
 

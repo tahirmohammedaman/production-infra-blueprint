@@ -195,6 +195,22 @@ obs-reload: ## Apply edited alert rules and Alertmanager routing without restart
 	curl -fsS -X POST http://localhost:$(ALERTMANAGER_PORT)/-/reload
 	@echo "reloaded; check http://localhost:$(PROMETHEUS_PORT)/rules"
 
+K6_IMAGE := docker.io/grafana/k6:2.1.0@sha256:65c920dc067d5e2e00befbf982af6ad6ad0117034e8b1c65817c7975c52d4669
+
+.PHONY: load
+load: ## Steady load through the local gateway, gated on the SLOs (RATE=60 DURATION=5m)
+	$(CONTAINER) run --rm --network host -v "$(PWD)/load/k6":/scripts:ro,z \
+		-e API_URL=http://localhost:$(GATEWAY_PORT) -e RATE=$${RATE:-60} -e DURATION=$${DURATION:-5m} \
+		$(K6_IMAGE) run /scripts/steady.js
+
+.PHONY: drill
+drill: ## Zero-downtime drill: roll the API under load in a local kind cluster, fail on any error
+	scripts/zero-downtime-drill.sh
+
+.PHONY: drill-down
+drill-down: ## Delete the drill's kind cluster
+	$(if $(findstring podman,$(CONTAINER)),KIND_EXPERIMENTAL_PROVIDER=podman,) kind delete cluster --name $${CLUSTER:-blueprint-drill}
+
 .PHONY: alerts
 alerts: ## List the alerts firing right now
 	@curl -fsS http://localhost:$(ALERTMANAGER_PORT)/api/v2/alerts?active=true \

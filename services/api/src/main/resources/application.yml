@@ -108,7 +108,8 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        # drain is the preStop hook; see ConnectionDrain and deploy/k8s/base/api/deployment.yaml.
+        include: health,info,prometheus,metrics,drain
   endpoint:
     health:
       probes:
@@ -168,6 +169,12 @@ springdoc:
     path: /v3/api-docs
 
 blueprint:
+  shutdown:
+    # How long the preStop hook keeps the pod serving with Connection: close before SIGTERM:
+    # long enough for every client to finish one request and move its connection elsewhere,
+    # and for the gateway to see the endpoint removed. Plus the 25s drain, inside the pod's 40s
+    # termination grace period.
+    drain-period: PT5S
   metrics:
     item-count-refresh: PT30S
   outbox:

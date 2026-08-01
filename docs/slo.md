@@ -26,7 +26,9 @@ node — not a configuration change, and the cost of that is in `docs/cost-analy
 **500 ms for 99% of requests.** Every endpoint is one indexed query or one cache read. Half a
 second is where a human notices, and it is far enough above normal latency that crossing it
 means something is wrong — pool exhaustion, a slow query, a GC storm — rather than that the
-day was busy.
+day was busy. Measured through the gateway on the local stack with `make load` (60 requests a
+second, a mix of reads and writes), p99 is 37 ms: the threshold sits an order of magnitude
+above normal, on purpose.
 
 **10 seconds for 99% of events.** The relay polls every second and the consumer applies an
 event in milliseconds, so normal freshness is one to two seconds. Ten is the point at which a

@@ -136,6 +136,8 @@ ConfigMaps. See `observability/README.md`.
 
 ```bash
 make obs-validate   # every config through its own binary, alert unit tests, the routing tree
+make load           # steady load through the gateway, gated on the SLOs
+make drill          # roll every API pod under load in a local kind cluster; fail on one error
 ```
 
 ## Deployment
@@ -187,6 +189,8 @@ make flux-status      # what the cluster thinks it is running
 - **`scripts/smoke-test.sh`** — what "working" is defined as, in executable form.
 - **`docs/slo.md` and `observability/prometheus/tests/`** — three objectives, the reasoning
   behind each number, and unit tests showing when every alert fires and when it stays quiet.
+- **`scripts/zero-downtime-drill.sh`** — the zero-downtime claim, tested: every API pod replaced
+  under constant load in a real cluster, failing on a single dropped request.
 - **`.semgrep/blueprint.yml`** — four rules that encode invariants this system depends on.
   Three of them were defects here before they were rules.
 
