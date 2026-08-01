@@ -1,13 +1,35 @@
+# Two Services, because clients and the broker itself need two different things from DNS.
+---
+# Bootstrap. An ordinary ClusterIP, so the name resolves whether or not the broker is ready. It
+# used to be the headless Service below, which has no address at all until the pod is Ready:
+# a client that started during a broker restart failed with "No resolvable bootstrap urls" — a
+# configuration error, not a connection error, which kills the worker at startup and which the
+# outbox relay would count against every event it tried to publish. Clients use this name only
+# to fetch metadata; after that they connect to the advertised listener, kafka-0.kafka-headless.
 apiVersion: v1
 kind: Service
 metadata:
   name: kafka
   namespace: blueprint
 spec:
-  # Headless, so kafka-0.kafka.blueprint.svc.cluster.local resolves to the pod directly.
-  # Kafka clients follow the advertised listener, and a ClusterIP would advertise an address
-  # that load-balances - which is meaningless for a broker and breaks the controller quorum.
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+---
+# Identity. Headless, so kafka-0.kafka-headless resolves to the pod itself, and publishing the
+# address before the pod is ready, because the broker needs that name while it is still
+# starting: the controller quorum is this same pod talking to itself by it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: blueprint
+spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: kafka
   ports:

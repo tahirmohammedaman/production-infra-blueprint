@@ -55,10 +55,13 @@ spec:
                   --config retention.ms="$3"
               }
 
-              # One partition. Ordering per aggregate is what the outbox relay's keying
-              # guarantees, and more partitions on a single broker buys parallelism the
-              # single worker replica cannot use.
-              create item-events 1 604800000
+              # Three partitions: one for each of the worker's consumer threads
+              # (blueprint.consumer.concurrency), and the count the application creates
+              # locally. This used to be one, on the reasoning that a single worker replica
+              # could not use more — but that replica runs three consumers, and with one
+              # partition two of them sat permanently idle. Ordering is per aggregate, which
+              # the relay's keying preserves across any number of partitions.
+              create item-events 3 604800000
 
               # The dead-letter topic keeps messages four times as long as the main one:
               # a poison message is found by a human, and humans are slower than consumers.

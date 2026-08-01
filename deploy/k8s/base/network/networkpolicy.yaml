@@ -168,6 +168,52 @@ spec:
           port: 5432
   egress: []
 ---
+# The migration Job runs the API's image against the database and nothing else. Until the
+# manifests first ran in a cluster that enforces policy it had no rule of its own: Postgres'
+# ingress admitted it, the default-deny above never let it out of its own pod, and every run
+# timed out connecting. k3s enforces NetworkPolicy out of the box, so production would have
+# failed its first deploy the same way.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: migrate
+  namespace: blueprint
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: migrate
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# The topics Job talks to the broker and nothing else, and had the same missing rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-topics
+  namespace: blueprint
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-topics
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

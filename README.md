@@ -154,8 +154,9 @@ infra/ansible   node hardening and the k3s bootstrap
 Reconciliation order is data, not a deploy script:
 
 ```
-infrastructure-controllers → infrastructure-configs → apps-config → apps-migrations → apps
-   Traefik, cert-manager       ACME issuers            ns+secrets     Flyway Job        rollout
+infrastructure-controllers → infrastructure-configs → apps-config → apps-data → apps-migrations → apps
+   Traefik, cert-manager       ACME issuers         ns, secrets,  Postgres,     Flyway Job     rollout
+                                                    network policy Redis, Kafka
 ```
 
 Each stage waits for the previous one to be *healthy*, not merely applied. The migration Job

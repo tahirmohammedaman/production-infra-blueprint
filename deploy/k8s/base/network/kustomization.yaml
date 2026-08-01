@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Applied with the Namespace, before any pod exists (deploy/k8s/config/prod). A policy applied
+# alongside the workloads it restricts leaves a window where they run unrestricted; applied
+# first, there is no moment at which a pod in this namespace can reach anything it should not.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: blueprint
+      app.kubernetes.io/managed-by: flux
+
+resources:
+  - networkpolicy.yaml

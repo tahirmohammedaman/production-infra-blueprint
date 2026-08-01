@@ -3,9 +3,10 @@
 # Ordering, expressed as data rather than as a deploy script:
 #
 #   infrastructure-configs   ingress class and certificate issuer must exist
-#     └── apps-config        namespace and decrypted secrets
-#           └── apps-migrations   schema is expanded before any new code runs against it
-#                 └── apps        the Deployments roll only after the Job succeeded
+#     └── apps-config        namespace, decrypted secrets, network policies
+#           └── apps-data         postgres, redis, kafka and its topics, healthy
+#                 └── apps-migrations   schema is expanded before any new code runs against it
+#                       └── apps        the Deployments roll only after the Job succeeded
 #
 # Each Kustomization owns a disjoint set of objects. That is not tidiness: two Flux
 # Kustomizations applying the same resource fight over ownership, and the dependency chain
@@ -40,6 +41,52 @@ spec:
     secretRef:
       name: sops-age
 ---
+# The stores the application and its migration need, healthy before either runs. On a fresh
+# cluster this is what gives the migration Job a database to migrate: when the stores were part
+# of `apps`, which waits on the migration, the Job waited for a Postgres that only the next
+# stage would create, and the chain never completed.
+#
+# prune: false, the one stage where it is off. A path renamed by mistake in git must not become
+# a deleted database in the cluster; removing a store is done by hand, deliberately.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-data
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: apps-config
+  interval: 1h
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./deploy/k8s/data/prod
+  prune: false
+  wait: true
+
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: StatefulSet
+      name: postgres
+      namespace: blueprint
+    - apiVersion: apps/v1
+      kind: StatefulSet
+      name: redis
+      namespace: blueprint
+    - apiVersion: apps/v1
+      kind: StatefulSet
+      name: kafka
+      namespace: blueprint
+    - apiVersion: batch/v1
+      kind: Job
+      name: kafka-topics
+      namespace: blueprint
+
+  # The topics Job is immutable, like the migration Job; see apps-migrations.
+  force: true
+---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -47,7 +94,7 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
-    - name: apps-config
+    - name: apps-data
     - name: infrastructure-configs
   interval: 10m
   retryInterval: 1m
@@ -104,12 +151,4 @@ spec:
     - apiVersion: apps/v1
       kind: Deployment
       name: worker
-      namespace: blueprint
-    - apiVersion: apps/v1
-      kind: StatefulSet
-      name: postgres
-      namespace: blueprint
-    - apiVersion: apps/v1
-      kind: StatefulSet
-      name: kafka
       namespace: blueprint

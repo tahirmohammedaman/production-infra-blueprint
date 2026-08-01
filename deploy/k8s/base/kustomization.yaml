@@ -12,24 +12,16 @@ labels:
       app.kubernetes.io/part-of: blueprint
       app.kubernetes.io/managed-by: flux
 
-# The Namespace and the migration Job are deliberately absent. Each is applied by its own
-# Flux Kustomization so that the three own disjoint sets of objects and can be ordered:
-# config (namespace + secrets) -> migrations (the Job) -> apps (everything here). Two Flux
-# Kustomizations applying the same object fight over ownership; the dependency chain only
-# works if nothing is claimed twice.
+# The application only: the two services and what routes to them. Everything they need first
+# is applied by earlier Flux Kustomizations, each owning a disjoint set of objects so that the
+# chain can be ordered:
+#
+#   config (namespace, secrets, network/) -> data (postgres/, redis/, kafka/)
+#     -> migrations (migration/) -> apps (everything here)
+#
+# Two Flux Kustomizations applying the same object fight over ownership; the dependency chain
+# only works if nothing is claimed twice.
 resources:
-  - networkpolicy.yaml
-
-  - postgres/statefulset.yaml
-  - postgres/service.yaml
-
-  - redis/statefulset.yaml
-  - redis/service.yaml
-
-  - kafka/statefulset.yaml
-  - kafka/service.yaml
-  - kafka/topics-job.yaml
-
   - api/serviceaccount.yaml
   - api/deployment.yaml
   - api/service.yaml

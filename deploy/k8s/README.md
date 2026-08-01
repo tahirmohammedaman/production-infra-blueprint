@@ -9,8 +9,9 @@ base/                     every workload, sized from measured RSS
   migration/              the Flyway Job, applied ahead of the rollout
   api/ worker/            the two services
   postgres/ redis/ kafka/ the three backing stores
-  networkpolicy.yaml      default-deny plus an explicit allowlist, ingress *and* egress
-config/prod/              Namespace and the SOPS-encrypted Secrets
+  network/                default-deny plus an explicit allowlist, ingress *and* egress
+config/prod/              Namespace, the SOPS-encrypted Secrets, the NetworkPolicies
+data/prod/                the three stores, so they are healthy before the migration runs
 migrations/prod/          just the Job, so Flux can block on it
 overlays/prod/            production: real hostname, real image names, image-policy setters
 overlays/dev/             a second namespace on the same cluster, one replica, no HPA
@@ -21,18 +22,26 @@ infrastructure/
                           HelmReleases, configured from ../../../observability
 ```
 
-## Why four kustomizations for production rather than one
+## Why five kustomizations for production rather than one
 
-Because they are applied by four Flux Kustomizations that depend on each other, and two Flux
+Because they are applied by Flux Kustomizations that depend on each other, and two Flux
 Kustomizations cannot own the same object — they fight over it. The split is what makes the
 ordering expressible:
 
 ```
-infrastructure-controllers → infrastructure-configs → apps-config → apps-migrations → apps
+infrastructure-controllers → infrastructure-configs → apps-config → apps-data → apps-migrations → apps
 ```
 
-`apps-config` holds the Namespace and the Secrets, separately from the application, so that
-a failed deploy cannot prune the database credentials out from under the database.
+`apps-config` holds the Namespace, the Secrets and the NetworkPolicies, separately from the
+application, so that a failed deploy cannot prune the database credentials out from under the
+database, and so that no pod ever runs before the policy that restricts it exists.
+`apps-data` holds Postgres, Redis and Kafka, and is the one stage that does not prune.
+
+The stores used to be part of `apps`. That worked on a cluster where Postgres already existed
+and deadlocked on a fresh one: the migration Job waited for a database that only the stage
+after it would create. It was found by bringing these manifests up in a real cluster for the
+first time, along with the other things schema validation could not see — see
+[Found by running it](#found-by-running-it).
 `apps-migrations` holds only the Job, so `wait: true` can block the rollout until the schema
 change has actually finished. That is the entire mechanism behind a safe expand/contract
 deploy — without it, Flux applies the Job and the Deployments together and the new pods race
@@ -111,6 +120,20 @@ kubectl -n monitoring create secret generic loki-object-storage \
 
 Alertmanager and Loki do not start until theirs exist. That is deliberate: an Alertmanager that
 cannot notify anyone should be visibly broken, not quietly running.
+
+## Found by running it
+
+Every manifest here rendered, passed kubeconform against the real 1.33 schemas, and passed
+checkov and trivy — and the first time they ran in a cluster, nothing came up. None of these
+is visible to a schema; all of them are visible to a pod.
+
+| What broke | Why validation could not see it | Fix |
+| --- | --- | --- |
+| A fresh cluster deadlocked: the migration Job waited for a Postgres created only by the stage after it | Ordering between Flux Kustomizations is not in any one manifest | `apps-data` stage before migrations |
+| The migration and topics Jobs timed out connecting | Default-deny blocked their egress; only the long-running pods had rules | egress policies for both Jobs, and policies applied with the namespace |
+| Kafka shut down in a loop in the dev namespace | Its DNS names hard-coded `blueprint`; valid YAML, wrong everywhere else | namespace-independent short names |
+| The worker crashed at startup whenever the broker was not yet ready | A headless Service has no DNS record until its pod is Ready | ClusterIP for bootstrap, headless only for identity |
+| Kafka was restarted four times during a load test while it was only slow | Its liveness probe started a JVM per check and timed out on a busy node | liveness is a TCP check; readiness keeps the real one |
 
 ## Local checks
 

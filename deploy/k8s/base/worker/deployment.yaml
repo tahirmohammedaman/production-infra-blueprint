@@ -10,11 +10,11 @@ spec:
   replicas: 1
   revisionHistoryLimit: 3
   strategy:
-    # Recreate, not RollingUpdate. The worker is a Kafka consumer in a group with one
-    # partition per topic: a second replica would sit idle waiting for a partition, and the
-    # rolling handover would trigger a consumer-group rebalance while the old pod is still
-    # committing. Stopping first is both simpler and faster to recover from, and the outbox
-    # means nothing is lost while it is down.
+    # Recreate, not RollingUpdate. The worker's three consumer threads already hold all three
+    # partitions, so a second replica would sit idle waiting for one, and the rolling handover
+    # would trigger a consumer-group rebalance while the old pod is still committing. Stopping
+    # first is both simpler and faster to recover from, and the outbox means nothing is lost
+    # while it is down.
     type: Recreate
   selector:
     matchLabels:

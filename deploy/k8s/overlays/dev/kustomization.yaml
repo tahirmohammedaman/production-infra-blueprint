@@ -8,10 +8,14 @@ namespace: blueprint-dev
 
 resources:
   - ../../base
-  # Prod gets its Namespace from deploy/k8s/config/prod, applied by a separate Flux
-  # Kustomization. Dev has no such split - there are no encrypted secrets to order around -
-  # so it takes the Namespace straight from the base and kustomize renames it.
+  # Prod applies these in stages, through separate Flux Kustomizations (clusters/prod/apps.yaml).
+  # Dev has no such split - there are no encrypted secrets to order around - so it takes every
+  # component in one go and kustomize moves them all into this namespace.
   - ../../base/namespace
+  - ../../base/network
+  - ../../base/postgres
+  - ../../base/redis
+  - ../../base/kafka
   - ../../base/migration
 
 # Dev secrets are generated from literals rather than encrypted. They protect nothing —
@@ -54,6 +58,16 @@ patches:
     target:
       kind: PodDisruptionBudget
       name: api
+  # Applied in one go, the migration Job starts alongside the database it migrates instead of
+  # after it, as the prod stages guarantee. Ten retries on the Job controller's exponential
+  # backoff wait out a cold Postgres start; the base's two are spent before it has one.
+  - patch: |
+      - op: replace
+        path: /spec/backoffLimit
+        value: 10
+    target:
+      kind: Job
+      name: migrate
   # Nothing load-tests dev, so an autoscaler here only ever fights the replica patch above.
   - patch: |
       $patch: delete

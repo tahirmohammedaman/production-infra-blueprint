@@ -239,6 +239,7 @@ ansible-lint: ## Lint the playbook at the production profile, as CI does
 KUSTOMIZATIONS := \
 	deploy/k8s/base \
 	deploy/k8s/config/prod \
+	deploy/k8s/data/prod \
 	deploy/k8s/migrations/prod \
 	deploy/k8s/overlays/prod \
 	deploy/k8s/overlays/dev \
