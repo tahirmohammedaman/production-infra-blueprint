@@ -22,10 +22,12 @@ spec:
       terminationGracePeriodSeconds: 60
 
       securityContext:
-        # The upstream postgres image starts as root and drops to uid 999 itself, which the
-        # `restricted` Pod Security Standard forbids. Running as 999 from the start is what
-        # makes it admissible - and it is also why cap_drop ALL crashlooped this image in
-        # the Compose stack: it needed CAP_SETUID to do the drop itself.
+        # The upstream image starts as root and drops to its own postgres user, which the
+        # `restricted` Pod Security Standard forbids. Running as a fixed unprivileged uid from
+        # the start is what makes it admissible - and it is also why cap_drop ALL crashlooped
+        # this image in the Compose stack: it needed CAP_SETUID to do the drop itself. The
+        # backup CronJob and the restore Job run as the same uid, so the files they write into
+        # the data volume are owned the way the server's are.
         runAsNonRoot: true
         runAsUser: 999
         runAsGroup: 999
@@ -33,9 +35,34 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 
+      initContainers:
+        # archive-wal.sh needs an S3 client and the stock postgres image has none. rclone is a
+        # single static binary: copied out of its own image into a shared volume, it gives the
+        # server one without a derived image to build, scan, sign and keep patched.
+        - name: tools
+          image: docker.io/rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
+          command: [cp, /usr/local/bin/rclone, /tools/rclone]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+
       containers:
         - name: postgres
           image: postgres:16-alpine
+          # Every setting is in postgresql.conf, from the postgres-config ConfigMap. The file
+          # initdb writes into the data directory is never read.
+          args: [postgres, -c, config_file=/etc/postgresql/postgresql.conf]
 
           securityContext:
             allowPrivilegeEscalation: false
@@ -50,6 +77,11 @@ spec:
             - name: postgres
               containerPort: 5432
 
+          # Where archive-wal.sh ships WAL segments. Environment, so it is read once at startup:
+          # changing the endpoint or the bucket takes a restart, unlike the mounted files below.
+          envFrom:
+            - configMapRef:
+                name: postgres-backup
           env:
             - name: POSTGRES_DB
               value: blueprint
@@ -63,6 +95,12 @@ spec:
             # initdb refuses to run in a directory containing lost+found.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            # Read once, when the data directory is first created. Checksums cost a few percent
+            # of write throughput and are the difference between detecting silent corruption and
+            # restoring from a backup that already contains it; pg_amcheck in the restore drill
+            # relies on them.
+            - name: POSTGRES_INITDB_ARGS
+              value: --data-checksums
 
           resources:
             # 29 MB measured on an empty schema; the request is what shared_buffers and the
@@ -89,11 +127,48 @@ spec:
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            - name: config
+              mountPath: /etc/postgresql
+              readOnly: true
+            - name: tools
+              mountPath: /tools
+              readOnly: true
+            - name: object-storage
+              mountPath: /run/object-storage
+              readOnly: true
 
       volumes:
         - name: secrets
           secret:
             secretName: blueprint-postgres-credentials
+            defaultMode: 0440
+        # postgresql.conf, pg_hba.conf, and the two scripts the server runs itself. The backup
+        # and restore scripts in the same ConfigMap belong to the CronJob and the restore Job.
+        - name: config
+          configMap:
+            name: postgres-config
+            defaultMode: 0444
+            items:
+              - key: postgresql.conf
+                path: postgresql.conf
+              - key: pg_hba.conf
+                path: pg_hba.conf
+              - key: archive-wal.sh
+                path: archive-wal.sh
+                mode: 0555
+              - key: restore-wal.sh
+                path: restore-wal.sh
+                mode: 0555
+        - name: tools
+          emptyDir:
+            sizeLimit: 128Mi
+        # S3 credentials for the WAL archive, created by hand once per cluster
+        # (deploy/k8s/README.md). Not optional: a production database that cannot archive
+        # should fail to start where someone is watching, not run for weeks with no way to
+        # restore it.
+        - name: object-storage
+          secret:
+            secretName: postgres-object-storage
             defaultMode: 0440
 
   volumeClaimTemplates:

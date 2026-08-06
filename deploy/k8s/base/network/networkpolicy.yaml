@@ -151,8 +151,8 @@ spec:
       app.kubernetes.io/name: postgres
   policyTypes: [Ingress, Egress]
   ingress:
-    # The API, the migration Job and the backup CronJob. Nothing else in the cluster has
-    # any business opening a connection to the database.
+    # The API, the migration Job, the backup CronJob and the metrics exporter. Nothing else in
+    # the cluster has any business opening a connection to the database.
     - from:
         - podSelector:
             matchLabels:
@@ -163,10 +163,102 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: postgres-backup
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres-exporter
       ports:
         - protocol: TCP
           port: 5432
-  egress: []
+  egress:
+    # WAL segments out to object storage, and back in during a restore. HTTPS to public
+    # addresses only: every private, shared and link-local range is excluded, so this opens a
+    # path to the object store and not to anything else in the cluster, on the node's private
+    # network, or at the cloud metadata endpoint.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# The nightly base backup: a replication connection to Postgres in, the backup out to object
+# storage. Its selector sat in the Postgres policy above, waiting, from the first day.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-backup
+  namespace: blueprint
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-backup
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# The restore Job (deploy/k8s/restore) reads from object storage and writes only to a volume.
+# It never talks to the database: the server is stopped while it runs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-restore
+  namespace: blueprint
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-restore
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-exporter
+  namespace: blueprint
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-exporter
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9187
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
 ---
 # The migration Job runs the API's image against the database and nothing else. Until the
 # manifests first ran in a cluster that enforces policy it had no rule of its own: Postgres'

@@ -1,0 +1,106 @@
+# postgres_exporter: Postgres' own view of itself, which nothing else here exports. The one
+# series an alert depends on is pg_stat_archiver_failed_count (PostgresWalArchivingFailing);
+# database size, connections by state, and transaction, deadlock and conflict counters are there
+# for diagnosis.
+#
+# A Deployment of its own, not a sidecar in the Postgres pod. A pod is Ready only when every
+# container in it is, so a crashlooping sidecar would take the database out of its Service's
+# DNS — a metrics exporter able to cause a total outage. As its own pod it connects over the
+# network like any other client, and fails alone.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: postgres-exporter
+    app.kubernetes.io/part-of: blueprint
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-exporter
+        app.kubernetes.io/part-of: blueprint
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # The image's `nobody`. The group is what lets it read the 0440 password file.
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+          # Five collectors of the default fifteen: database, stat_activity, stat_archiver,
+          # stat_database and wal. Measured against this schema, 224 samples per scrape instead
+          # of 651 — the largest of the ones switched off re-exports every line of
+          # postgresql.conf as a gauge, and the file is in git.
+          args:
+            - --no-collector.settings
+            - --no-collector.locks
+            - --no-collector.replication
+            - --no-collector.replication_slots
+            - --no-collector.roles
+            - --no-collector.stat_bgwriter
+            - --no-collector.stat_progress_vacuum
+            - --no-collector.stat_replication
+            - --no-collector.stat_user_tables
+            - --no-collector.statio_user_tables
+          env:
+            - name: DATA_SOURCE_URI
+              value: postgres:5432/blueprint?sslmode=disable
+            - name: DATA_SOURCE_USER
+              value: blueprint
+            - name: DATA_SOURCE_PASS_FILE
+              value: /run/secrets/postgres-password
+
+          ports:
+            - name: metrics
+              containerPort: 9187
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+          # 9 MB resident, measured with the collectors above.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 48Mi
+
+          # The landing page, not /metrics: a probe that queries the database would restart the
+          # exporter whenever Postgres is slow, which is exactly when its numbers matter.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            periodSeconds: 10
+
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+
+      volumes:
+        - name: secrets
+          secret:
+            secretName: blueprint-postgres-credentials
+            defaultMode: 0440

@@ -1,0 +1,156 @@
+# Nightly base backup.
+#
+# The WAL archive only makes a restore possible back to the oldest base backup it can be
+# replayed onto, and replaying a day of WAL is the slow part of a restore. One base backup a day
+# bounds both: a restore replays at most a day of segments, and the 14-day lifecycle rule on the
+# bucket keeps fourteen starting points (infra/terraform/modules/storage).
+#
+# Runs the same base-backup.sh as scripts/restore-drill.sh, which is what proves the result
+# restores. The last successful run is exported by kube-state-metrics and alerted on as
+# PostgresBackupMissing, so a job that silently stops being scheduled is noticed within a day.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/part-of: blueprint
+spec:
+  # 02:30 UTC, 05:30 in Addis Ababa: after the day's writes, and hours before anyone is awake to
+  # need a restore. Stated explicitly because a CronJob otherwise runs in the controller
+  # manager's time zone, which is whatever the node happens to be set to.
+  schedule: "30 2 * * *"
+  timeZone: Etc/UTC
+  # A backup still running at the next schedule is a problem to investigate, not a reason to
+  # start a second one against the same server.
+  concurrencyPolicy: Forbid
+  # A node that was down at 02:30 takes the backup when it comes back, up to three hours late,
+  # rather than skipping a day.
+  startingDeadlineSeconds: 10800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: postgres-backup
+            app.kubernetes.io/part-of: blueprint
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+
+          # The Postgres uid, so the files pg_basebackup writes are owned the way the server's
+          # are. The restricted Pod Security Standard applies here as everywhere else.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+
+          initContainers:
+            # rclone is a single static binary. Copying it out of its own image into a shared
+            # volume gives the stock postgres image an S3 client without a derived image to
+            # build, scan, sign and keep patched.
+            - name: tools
+              image: docker.io/rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
+              command: [cp, /usr/local/bin/rclone, /tools/rclone]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+              volumeMounts:
+                - name: tools
+                  mountPath: /tools
+
+          containers:
+            - name: backup
+              # The server's own image: pg_basebackup must be the same major version as the
+              # server it copies.
+              image: postgres:16-alpine
+              command: [/etc/postgresql/base-backup.sh]
+
+              envFrom:
+                - configMapRef:
+                    name: postgres-backup
+              env:
+                - name: PGHOST
+                  value: postgres
+                - name: PGUSER
+                  value: blueprint
+                - name: POSTGRES_PASSWORD_FILE
+                  value: /run/secrets/postgres-password
+                - name: BACKUP_WORKDIR
+                  value: /backup
+
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+
+              resources:
+                # 26 MiB peak, measured by scripts/restore-drill.sh from the container's own
+                # cgroup, page cache included. rclone's upload buffers are bounded by its chunk
+                # size and concurrency, not by the size of the database; what grows with the data
+                # is page cache from the staged backup, which the kernel reclaims under the limit
+                # rather than killing the container for.
+                requests:
+                  cpu: 100m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/postgresql
+                  readOnly: true
+                - name: tools
+                  mountPath: /tools
+                  readOnly: true
+                - name: secrets
+                  mountPath: /run/secrets
+                  readOnly: true
+                - name: object-storage
+                  mountPath: /run/object-storage
+                  readOnly: true
+                - name: backup
+                  mountPath: /backup
+
+          volumes:
+            - name: config
+              configMap:
+                name: postgres-config
+                defaultMode: 0444
+                items:
+                  - key: base-backup.sh
+                    path: base-backup.sh
+                    mode: 0555
+            - name: tools
+              emptyDir:
+                sizeLimit: 128Mi
+            - name: secrets
+              secret:
+                secretName: blueprint-postgres-credentials
+                defaultMode: 0440
+            - name: object-storage
+              secret:
+                secretName: postgres-object-storage
+                defaultMode: 0440
+            # The compressed backup, staged before upload. Bounded by the size of the data
+            # volume it is a copy of.
+            - name: backup
+              emptyDir:
+                sizeLimit: 8Gi

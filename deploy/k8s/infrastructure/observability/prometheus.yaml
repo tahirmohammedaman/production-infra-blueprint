@@ -5,9 +5,11 @@
 # stack loads — and its config reloader applies a changed rule within a minute of Flux applying
 # the commit. Alertmanager does the same with observability/alertmanager/alertmanager.yml.
 #
-# The chart's three companion exporters are switched off. kube-state-metrics, node-exporter
-# and the pushgateway each add hundreds to thousands of series that no rule or dashboard here
-# reads; container memory and CPU come from the kubelet instead, through four kept series.
+# The chart's companion exporters are off or cut down to what a rule reads. node-exporter and the
+# pushgateway each add hundreds to thousands of series that no rule or dashboard here reads, and
+# container memory and CPU come from the kubelet instead, through four kept series.
+# kube-state-metrics runs, restricted to two series about one CronJob, because the question "has
+# the database been backed up today" has no other source.
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -33,8 +35,23 @@ spec:
       retries: 3
       remediateLastFailure: true
   values:
+    # One collector, one namespace, two metrics: PostgresBackupMissing's inputs and nothing else.
+    # Unrestricted, kube-state-metrics exports a family of series for every Deployment, pod,
+    # ReplicaSet and node in the cluster.
     kube-state-metrics:
-      enabled: false
+      enabled: true
+      collectors: [cronjobs]
+      namespaces: blueprint
+      metricAllowlist:
+        - kube_cronjob_created
+        - kube_cronjob_status_last_successful_time
+      # 9.7 MiB working set, measured with exactly these flags in a kind cluster.
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 48Mi
     prometheus-node-exporter:
       enabled: false
     prometheus-pushgateway:

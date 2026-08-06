@@ -6,3 +6,34 @@ kind: Kustomization
 resources:
   - statefulset.yaml
   - service.yaml
+  - exporter.yaml
+  - cronjob.yaml
+
+# The server's configuration and the archive, backup and restore scripts, kept as plain files so
+# scripts/restore-drill.sh can mount exactly what the cluster runs.
+#
+# No content hash in the names. A hashed name changes the pod template on every edit, and for a
+# single-replica database a changed pod template is a restart — an outage — to change a log
+# setting. A mounted ConfigMap is updated in place instead: the scripts take effect on their next
+# run, and most of postgresql.conf with a reload (docs/operations.md). The restore Job in
+# deploy/k8s/restore also needs a name it can know in advance.
+generatorOptions:
+  disableNameSuffixHash: true
+
+# Namespaced like every other object in this directory. Without it the ConfigMaps land wherever
+# the including kustomization says, and in `default` when it says nothing — where the pods
+# cannot mount them and wait in PodInitializing with only an event to say why.
+configMapGenerator:
+  - name: postgres-config
+    namespace: blueprint
+    files:
+      - config/postgresql.conf
+      - config/pg_hba.conf
+      - config/archive-wal.sh
+      - config/restore-wal.sh
+      - config/base-backup.sh
+      - config/prepare-restore.sh
+  - name: postgres-backup
+    namespace: blueprint
+    envs:
+      - config/backup.env

@@ -368,6 +368,77 @@ The issuer uses HTTP-01, which needs port 80 reachable from the internet and DNS
 the node. A firewall change (`infra/terraform/modules/firewall`) or a DNS change is the usual
 cause.
 
+## PostgresWalArchivingFailing
+
+**Ticket.** The archive command has been failing for twenty minutes and nothing has been
+shipped. Postgres keeps every segment it could not archive, so nothing is lost yet. But writes
+since the failure exist only on the node's disk, outside any backup, and `pg_wal` grows until
+archiving recovers — or until the volume is full, which stops the database.
+
+**Look first:** why the command fails. Postgres logs the command's own error on every attempt:
+
+```bash
+kubectl -n blueprint logs postgres-0 --tail=200 | grep -B2 'archive command failed'
+kubectl -n blueprint exec postgres-0 -- psql -U blueprint -d blueprint -c "SELECT * FROM pg_stat_archiver;"
+kubectl -n blueprint exec postgres-0 -- du -sh /var/lib/postgresql/data/pgdata/pg_wal
+```
+
+```logql
+{service_name="postgres"} |= "archive command failed"
+```
+
+- **`InvalidAccessKeyId`, `SignatureDoesNotMatch`, `403`** — the `postgres-object-storage`
+  credential was rotated or revoked. Recreate the Secret (`deploy/k8s/README.md`). No restart
+  is needed: rclone reads the credentials file on every attempt, and the kubelet refreshes the
+  mounted Secret within a minute or two.
+- **`NoSuchBucket`** — `BACKUP_REMOTE` in `deploy/k8s/base/postgres/config/backup.env` no longer
+  matches `terraform output object_storage_bucket`.
+- **Timeouts, `no such host`** — the object store is unreachable. Its status page first, then the
+  `postgres` NetworkPolicy's egress rule.
+
+**Do not** delete files from `pg_wal` to make room. Each one is a segment no backup has, and
+removing it leaves a hole no restore can cross. If the volume is filling faster than the cause
+can be fixed, grow the volume (`data_volume_size` in Terraform).
+
+**It stops** when a segment gets through. The archiver then ships the backlog in order and
+`pg_wal` shrinks after the next checkpoint. Nothing needs re-taking: the segments were kept, so
+the restore window has no gap.
+
+## PostgresBackupMissing
+
+**Ticket.** The nightly `postgres-backup` CronJob has not succeeded in more than 30 hours. WAL
+archiving may be fine, but every restore now starts further back and replays more, and when the
+newest base backup reaches 14 days the bucket's lifecycle rule deletes it — the archived WAL
+alone restores nothing.
+
+**Look first:** whether it ran at all, and how it ended.
+
+```bash
+kubectl -n blueprint get cronjob postgres-backup        # SUSPEND true? LAST SCHEDULE?
+kubectl -n blueprint get jobs --sort-by=.metadata.creationTimestamp | grep postgres-backup
+kubectl -n blueprint logs job/<the newest one> -c backup
+```
+
+- **No recent Jobs** — the CronJob is suspended. The restore runbook suspends it; a restore that
+  was never finished is the likely cause. `kubectl -n blueprint patch cronjob postgres-backup -p
+  '{"spec":{"suspend":false}}'`.
+- **`no pg_hba.conf entry for replication connection`** — `pg_hba.conf` lost its replication
+  lines.
+- **`could not connect`** — Postgres was down at 02:30, or the `postgres-backup` NetworkPolicy
+  changed.
+- **Upload errors** — the same causes as [PostgresWalArchivingFailing](#postgreswalarchivingfailing);
+  it is probably firing too.
+- **`DeadlineExceeded`** — the backup took more than an hour. The database has outgrown the
+  schedule's assumptions; see `docs/operations.md`.
+
+Take one now rather than waiting for 02:30, and watch it finish:
+
+```bash
+kubectl -n blueprint create job --from=cronjob/postgres-backup postgres-backup-manual-$(date +%s)
+```
+
+**It stops** when the CronJob next records a successful run.
+
 ## Watchdog
 
 **Always firing, by design.** Alertmanager forwards it to an external dead man's switch every

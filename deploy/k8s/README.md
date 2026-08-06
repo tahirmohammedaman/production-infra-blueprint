@@ -9,12 +9,16 @@ base/                     every workload, sized from measured RSS
   migration/              the Flyway Job, applied ahead of the rollout
   api/ worker/            the two services
   postgres/ redis/ kafka/ the three backing stores
+  postgres/config/        postgresql.conf, pg_hba.conf, and the WAL archive, backup and restore
+                          scripts, which scripts/restore-drill.sh runs unchanged
   network/                default-deny plus an explicit allowlist, ingress *and* egress
 config/prod/              Namespace, the SOPS-encrypted Secrets, the NetworkPolicies
 data/prod/                the three stores, so they are healthy before the migration runs
 migrations/prod/          just the Job, so Flux can block on it
 overlays/prod/            production: real hostname, real image names, image-policy setters
 overlays/dev/             a second namespace on the same cluster, one replica, no HPA
+restore/                  the point-in-time restore Job: applied by hand from
+                          docs/runbooks/db-restore.md, never by Flux
 infrastructure/
   controllers/            Traefik and cert-manager as HelmReleases
   configs/                the ACME ClusterIssuers, which need cert-manager's CRDs first
@@ -91,7 +95,7 @@ kubectl -n monitoring port-forward svc/grafana 3000:80
 
 ## Secrets created by hand
 
-Everything this repository can generate is committed, SOPS-encrypted. Four Secrets hold
+Everything this repository can generate is committed, SOPS-encrypted. Five Secrets hold
 credentials issued by someone else, so they are created once per cluster, from files rather
 than `--from-literal` so the values never land in shell history:
 
@@ -116,10 +120,17 @@ kubectl -n monitoring create secret generic alertmanager-receivers \
 #   aws_secret_access_key = ...
 kubectl -n monitoring create secret generic loki-object-storage \
   --from-file=credentials=./loki-credentials
+
+# Object storage for the WAL archive and the nightly base backups, in the same format. A key of
+# its own rather than Loki's, so either can be revoked without the other.
+kubectl -n blueprint create secret generic postgres-object-storage \
+  --from-file=credentials=./postgres-credentials
 ```
 
-Alertmanager and Loki do not start until theirs exist. That is deliberate: an Alertmanager that
-cannot notify anyone should be visibly broken, not quietly running.
+Alertmanager, Loki and Postgres do not start until theirs exist. That is deliberate: an
+Alertmanager that cannot notify anyone, or a database that cannot be backed up, should be
+visibly broken, not quietly running. On a fresh cluster, create `postgres-object-storage` before
+Flux reaches `apps-data`, or that stage waits for it.
 
 ## Found by running it
 

@@ -211,6 +211,10 @@ drill: ## Zero-downtime drill: roll the API under load in a local kind cluster, 
 drill-down: ## Delete the drill's kind cluster
 	$(if $(findstring podman,$(CONTAINER)),KIND_EXPERIMENTAL_PROVIDER=podman,) kind delete cluster --name $${CLUSTER:-blueprint-drill}
 
+.PHONY: restore-drill
+restore-drill: ## Back up Postgres, destroy it, restore to a point in time; fail on one wrong row (ROWS=20000)
+	scripts/restore-drill.sh
+
 .PHONY: alerts
 alerts: ## List the alerts firing right now
 	@curl -fsS http://localhost:$(ALERTMANAGER_PORT)/api/v2/alerts?active=true \
@@ -259,6 +263,7 @@ KUSTOMIZATIONS := \
 	deploy/k8s/migrations/prod \
 	deploy/k8s/overlays/prod \
 	deploy/k8s/overlays/dev \
+	deploy/k8s/restore \
 	deploy/k8s/infrastructure/controllers \
 	deploy/k8s/infrastructure/configs \
 	deploy/k8s/infrastructure/observability \

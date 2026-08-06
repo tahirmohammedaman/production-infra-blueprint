@@ -117,7 +117,7 @@ a failure would otherwise be invisible.
   place a request that never reached the API is counted. Freshness of the read model is
   measured from the transaction commit, not the Kafka publish. Each has multi-window,
   multi-burn-rate alerts. `docs/slo.md` explains every number.
-- **Nineteen alerts, two severities, each with a promtool unit test** and a section in
+- **Twenty-one alerts, two severities, each with a promtool unit test** and a section in
   `docs/runbooks/alerts.md`. A test covers when an alert must fire and, just as important,
   when it must not.
 - **Signals that link to each other.** A latency exemplar opens a trace. A log line's trace id
@@ -138,6 +138,7 @@ ConfigMaps. See `observability/README.md`.
 make obs-validate   # every config through its own binary, alert unit tests, the routing tree
 make load           # steady load through the gateway, gated on the SLOs
 make drill          # roll every API pod under load in a local kind cluster; fail on one error
+make restore-drill  # back up Postgres, destroy it, restore to a second; fail on one wrong row
 ```
 
 ## Deployment

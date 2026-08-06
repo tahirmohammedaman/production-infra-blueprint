@@ -215,6 +215,55 @@ groups:
             already failed to renew at least once.
           runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#certificateexpiringsoon
 
+  - name: blueprint.backups
+    rules:
+      # Postgres keeps every segment the archive command has not accepted, so a failing archive
+      # loses nothing yet. What it does is stop the restore window moving forward — every write
+      # since the failure exists only on the node's disk — and grow pg_wal towards a full volume,
+      # which does stop the database. Both conditions, as for the relay: a failure alone may be a
+      # blip the next attempt fixed, but the archiver retries one segment at a time, in order, so
+      # while it is failing nothing at all is shipped.
+      - alert: PostgresWalArchivingFailing
+        expr: |
+          (sum by (job) (increase(pg_stat_archiver_failed_count[10m])) > 0)
+            and on (job)
+          (sum by (job) (increase(pg_stat_archiver_archived_count[10m])) == 0)
+        for: 10m
+        labels:
+          severity: ticket
+          service: postgres
+        annotations:
+          summary: Postgres cannot archive WAL, so recent writes are in no backup
+          description: >-
+            The archive command has been failing for 20 minutes without shipping a segment.
+            Nothing is lost yet; writes since the failure cannot be restored until it recovers,
+            and pg_wal grows until it does.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#postgreswalarchivingfailing
+
+      # 30 hours rather than 24, so a run delayed within the CronJob's three-hour starting deadline
+      # is not reported missing. The second half covers a CronJob that has never once succeeded,
+      # which has no last-success series to be old.
+      - alert: PostgresBackupMissing
+        expr: |
+          (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{cronjob="postgres-backup"}) > 30 * 3600)
+            or
+          (
+            (time() - max by (namespace, cronjob) (kube_cronjob_created{cronjob="postgres-backup"}) > 30 * 3600)
+              unless on (namespace, cronjob)
+            kube_cronjob_status_last_successful_time{cronjob="postgres-backup"}
+          )
+        for: 15m
+        labels:
+          severity: ticket
+          service: postgres
+        annotations:
+          summary: Postgres has not had a successful base backup in over 30 hours
+          description: >-
+            The postgres-backup CronJob has not completed a run in more than a day. A restore now
+            replays more WAL, and once the newest base backup is 14 days old the bucket's
+            lifecycle rule deletes it, and with it the ability to restore at all.
+          runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#postgresbackupmissing
+
   - name: blueprint.monitoring
     rules:
       # Always firing. Alertmanager forwards it to an external dead man's switch every

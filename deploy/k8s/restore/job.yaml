@@ -1,0 +1,127 @@
+# Point-in-time restore of the production database.
+#
+# Not reconciled by Flux: nothing under clusters/ points here. It is applied by hand, by someone
+# following docs/runbooks/db-restore.md, with the Postgres StatefulSet scaled to zero.
+#
+# It prepares the data volume and exits; Postgres performs the recovery itself when the
+# StatefulSet is scaled back up. The target comes from the optional `postgres-restore` ConfigMap
+# the runbook creates — RECOVERY_TARGET_TIME, and BACKUP to pin a base backup. Without it the
+# restore replays everything archived: the latest state the archive has.
+#
+# The same prepare-restore.sh scripts/restore-drill.sh runs, against the same bucket layout.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-restore
+  namespace: blueprint
+  labels:
+    app.kubernetes.io/name: postgres-restore
+    app.kubernetes.io/part-of: blueprint
+spec:
+  # A failed restore is read and understood, never retried by the controller: a second attempt
+  # would begin by moving the first one's half-prepared directory aside.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-restore
+        app.kubernetes.io/part-of: blueprint
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+
+      # The server's uid: everything written into the data volume must be owned the way the
+      # server that starts on it expects.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        - name: tools
+          image: docker.io/rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
+          command: [cp, /usr/local/bin/rclone, /tools/rclone]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+
+      containers:
+        - name: restore
+          image: postgres:16-alpine
+          command: [/etc/postgresql/prepare-restore.sh]
+
+          envFrom:
+            - configMapRef:
+                name: postgres-backup
+            - configMapRef:
+                name: postgres-restore
+                optional: true
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+          # 65 MiB peak in scripts/restore-drill.sh, most of it page cache from writing the
+          # extracted data directory; reclaimable, so the limit does not grow with the database.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              memory: 192Mi
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: config
+              mountPath: /etc/postgresql
+              readOnly: true
+            - name: tools
+              mountPath: /tools
+              readOnly: true
+            - name: object-storage
+              mountPath: /run/object-storage
+              readOnly: true
+
+      volumes:
+        # The StatefulSet's own claim. prepare-restore.sh refuses to touch it while a server's
+        # postmaster.pid is there, because ReadWriteOnce does not stop two pods on one node from
+        # mounting it at once.
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-postgres-0
+        - name: config
+          configMap:
+            name: postgres-config
+            defaultMode: 0444
+            items:
+              - key: prepare-restore.sh
+                path: prepare-restore.sh
+                mode: 0555
+        - name: tools
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: object-storage
+          secret:
+            secretName: postgres-object-storage
+            defaultMode: 0440

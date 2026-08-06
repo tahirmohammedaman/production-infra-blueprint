@@ -340,6 +340,102 @@ tests:
               description: cert-manager renews at 30 days remaining, so a certificate this close to expiry has already failed to renew at least once.
               runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#certificateexpiringsoon
 
+  - name: an archive that keeps failing and ships nothing raises a ticket
+    interval: 1m
+    input_series:
+      # Archiving normally, then from minute 6 the object store refuses every attempt: three
+      # failures a minute as the archiver retries the same segment, and nothing gets through.
+      - series: 'pg_stat_archiver_failed_count{job="postgres", instance="postgres-exporter-1"}'
+        values: '0x5 3+3x30'
+      - series: 'pg_stat_archiver_archived_count{job="postgres", instance="postgres-exporter-1"}'
+        values: '0+1x5 5x30'
+    alert_rule_test:
+      # Both halves hold from about minute 15, when the ten-minute window no longer contains a
+      # shipped segment; then the ten-minute `for`.
+      - eval_time: 20m
+        alertname: PostgresWalArchivingFailing
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: PostgresWalArchivingFailing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: postgres
+              job: postgres
+            exp_annotations:
+              summary: Postgres cannot archive WAL, so recent writes are in no backup
+              description: The archive command has been failing for 20 minutes without shipping a segment. Nothing is lost yet; writes since the failure cannot be restored until it recovers, and pg_wal grows until it does.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#postgreswalarchivingfailing
+
+  - name: an archive failure the next attempt fixed does not
+    interval: 1m
+    input_series:
+      - series: 'pg_stat_archiver_failed_count{job="postgres", instance="postgres-exporter-1"}'
+        values: '0x5 1x30'
+      - series: 'pg_stat_archiver_archived_count{job="postgres", instance="postgres-exporter-1"}'
+        values: '0+1x35'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PostgresWalArchivingFailing
+        exp_alerts: []
+
+  - name: a backup CronJob that stopped succeeding raises a ticket
+    interval: 1m
+    input_series:
+      # Test time starts at the epoch: the last success was at 0, and nothing since.
+      - series: 'kube_cronjob_created{namespace="blueprint", cronjob="postgres-backup"}'
+        values: '0x1900'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="blueprint", cronjob="postgres-backup"}'
+        values: '0x1900'
+    alert_rule_test:
+      - eval_time: 29h
+        alertname: PostgresBackupMissing
+        exp_alerts: []
+      - eval_time: 31h
+        alertname: PostgresBackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: postgres
+              namespace: blueprint
+              cronjob: postgres-backup
+            exp_annotations:
+              summary: Postgres has not had a successful base backup in over 30 hours
+              description: The postgres-backup CronJob has not completed a run in more than a day. A restore now replays more WAL, and once the newest base backup is 14 days old the bucket's lifecycle rule deletes it, and with it the ability to restore at all.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#postgresbackupmissing
+
+  - name: a backup that succeeds every day does not
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="blueprint", cronjob="postgres-backup"}'
+        values: '0x1900'
+      # Succeeded at the epoch, and again a day later.
+      - series: 'kube_cronjob_status_last_successful_time{namespace="blueprint", cronjob="postgres-backup"}'
+        values: '0x1440 86400x460'
+    alert_rule_test:
+      - eval_time: 31h
+        alertname: PostgresBackupMissing
+        exp_alerts: []
+
+  - name: a backup CronJob that has never once succeeded raises a ticket too
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="blueprint", cronjob="postgres-backup"}'
+        values: '0x1900'
+    alert_rule_test:
+      - eval_time: 31h
+        alertname: PostgresBackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: postgres
+              namespace: blueprint
+              cronjob: postgres-backup
+            exp_annotations:
+              summary: Postgres has not had a successful base backup in over 30 hours
+              description: The postgres-backup CronJob has not completed a run in more than a day. A restore now replays more WAL, and once the newest base backup is 14 days old the bucket's lifecycle rule deletes it, and with it the ability to restore at all.
+              runbook_url: https://github.com/tahirmohammedaman/production-infra-blueprint/blob/main/docs/runbooks/alerts.md#postgresbackupmissing
+
   - name: log lines dropped by the pipeline raise a ticket
     interval: 1m
     input_series:

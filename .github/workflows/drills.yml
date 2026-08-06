@@ -1,0 +1,84 @@
+# Drills: the claims this repository makes about failure, tested by causing the failure.
+#
+#   restore   back up a Postgres running production's configuration, destroy it, and restore it
+#             to a point in time; fails on a single row lost or a single row kept that should not be
+#
+# Weekly as well as on change, because a restore path nobody has exercised recently is a hope:
+# the base image moves, the object store's API moves, and neither needs a commit here to break it.
+
+name: drills
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/k8s/base/postgres/**'
+      - 'services/api/src/main/resources/db/migration/**'
+      - 'scripts/restore-drill.sh'
+      - 'scripts/lib.sh'
+      - '.github/workflows/drills.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/k8s/base/postgres/**'
+      - 'services/api/src/main/resources/db/migration/**'
+      - 'scripts/restore-drill.sh'
+      - 'scripts/lib.sh'
+      - '.github/workflows/drills.yml'
+  schedule:
+    # Tuesday 04:00 UTC, the morning after the weekly re-scan of the published images.
+    - cron: '0 4 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: drills-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    name: restore
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Everything runs in containers from digest-pinned images; the runner contributes Docker.
+      - name: Back up, destroy, and restore to a point in time
+        env:
+          # Five times the local default, so the timings in the summary describe more than
+          # container start-up.
+          ROWS: "100000"
+        run: scripts/restore-drill.sh
+
+      - name: Publish the measurements
+        if: success()
+        run: |
+          {
+            echo "### Restore drill"
+            echo
+            echo '```'
+            cat .rendered/restore-drill/summary.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # Single required check, as in the other workflows.
+  drills:
+    name: drills
+    runs-on: ubuntu-24.04
+    needs: [restore]
+    if: always()
+    steps:
+      - name: Verify no upstream job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "upstream results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            if [[ "${result}" != "success" && "${result}" != "skipped" ]]; then
+              echo "::error::a required job reported '${result}'"
+              exit 1
+            fi
+          done

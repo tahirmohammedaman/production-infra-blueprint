@@ -68,6 +68,39 @@ patches:
     target:
       kind: Job
       name: migrate
+  # Dev has no object storage to archive to or back up into. Without these two patches its
+  # Postgres would wait for a credential Secret nobody creates, and once given one, keep every
+  # WAL segment it could not ship until the volume filled. The command-line setting wins over
+  # postgresql.conf, so the file stays production's.
+  - patch: |
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+      spec:
+        template:
+          spec:
+            containers:
+              - name: postgres
+                args: [postgres, -c, config_file=/etc/postgresql/postgresql.conf, -c, archive_mode=off]
+                volumeMounts:
+                  - mountPath: /run/object-storage
+                    $patch: delete
+            volumes:
+              - name: object-storage
+                $patch: delete
+    target:
+      kind: StatefulSet
+      name: postgres
+  - patch: |
+      $patch: delete
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: postgres-backup
+    target:
+      kind: CronJob
+      name: postgres-backup
   # Nothing load-tests dev, so an autoscaler here only ever fights the replica patch above.
   - patch: |
       $patch: delete

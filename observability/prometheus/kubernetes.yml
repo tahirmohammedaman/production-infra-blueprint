@@ -58,6 +58,22 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: instance
 
+  # postgres_exporter: its own Deployment rather than a sidecar in the database pod, which a
+  # crashing sidecar would make unready (deploy/k8s/base/postgres/exporter.yaml). 224 samples
+  # measured with its five collectors; the budget leaves room for more tables, not more collectors.
+  - job_name: postgres
+    sample_limit: 400
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [blueprint]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+        regex: postgres-exporter;metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
   # Traefik exposes metrics on its own entrypoint, which is never published by the Service.
   - job_name: gateway
     sample_limit: 1000
@@ -80,6 +96,22 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
         regex: cert-manager;9402
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+
+  # kube-state-metrics, restricted in its HelmRelease to the one cluster object a rule reads:
+  # the backup CronJob's creation time and last success (PostgresBackupMissing). Nothing else in
+  # the cluster reports whether a scheduled job has actually been running.
+  - job_name: kube-state-metrics
+    sample_limit: 50
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+        regex: kube-state-metrics;8080
         action: keep
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: instance
