@@ -1,5 +1,7 @@
 package dev.tahir.blueprint.api;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -7,19 +9,23 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.sql.SQLTransientConnectionException;
 import java.util.UUID;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 import dev.tahir.blueprint.domain.DuplicateItemException;
 import dev.tahir.blueprint.domain.Item;
@@ -92,5 +98,35 @@ class ItemControllerTest {
     @DisplayName("rejects a page size beyond the documented maximum")
     void oversizedPageIsRejected() throws Exception {
         mockMvc.perform(get("/api/v1/items").param("size", "5000")).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("answers a request that could not get a database connection with 503 and Retry-After")
+    void noDatabaseConnectionIsServiceUnavailable() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(service.get(eq(id)))
+                .thenThrow(new CannotCreateTransactionException(
+                        "Could not open JPA EntityManager for transaction",
+                        new SQLTransientConnectionException(
+                                "blueprint-pool - Connection is not available, request timed out after 3000ms")));
+
+        mockMvc.perform(get("/api/v1/items/{id}", id))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "5"))
+                .andExpect(jsonPath("$.title").value("Database unavailable"))
+                // The pool's message describes its internals; the caller gets the problem type.
+                .andExpect(content().string(not(containsString("blueprint-pool"))));
+    }
+
+    @Test
+    @DisplayName("sends Retry-After as a header, not only in the body, when the cache is unreachable")
+    void cacheFailureCarriesRetryAfterHeader() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(service.get(eq(id))).thenThrow(new RedisConnectionFailureException("connection refused"));
+
+        mockMvc.perform(get("/api/v1/items/{id}", id))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "5"))
+                .andExpect(jsonPath("$.retryAfterSeconds").value(5));
     }
 }

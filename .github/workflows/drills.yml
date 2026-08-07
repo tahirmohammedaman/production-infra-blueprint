@@ -2,28 +2,19 @@
 #
 #   restore   back up a Postgres running production's configuration, destroy it, and restore it
 #             to a point in time; fails on a single row lost or a single row kept that should not be
+#   rollout   replace every API pod of the dev overlay, in a real cluster, under constant load that
+#             is half writes; fails on a single failed request
 #
-# Weekly as well as on change, because a restore path nobody has exercised recently is a hope:
-# the base image moves, the object store's API moves, and neither needs a commit here to break it.
+# Weekly as well as on change, because a claim nobody has re-tested recently is a hope: the base
+# images move, the object store's API moves, the node image moves, and none of them needs a commit
+# here to break a drill.
 
 name: drills
 
 on:
-  pull_request:
-    paths:
-      - 'deploy/k8s/base/postgres/**'
-      - 'services/api/src/main/resources/db/migration/**'
-      - 'scripts/restore-drill.sh'
-      - 'scripts/lib.sh'
-      - '.github/workflows/drills.yml'
   push:
     branches: [main]
-    paths:
-      - 'deploy/k8s/base/postgres/**'
-      - 'services/api/src/main/resources/db/migration/**'
-      - 'scripts/restore-drill.sh'
-      - 'scripts/lib.sh'
-      - '.github/workflows/drills.yml'
+  pull_request:
   schedule:
     # Tuesday 04:00 UTC, the morning after the weekly re-scan of the published images.
     - cron: '0 4 * * 2'
@@ -37,9 +28,44 @@ permissions:
   contents: read
 
 jobs:
+  # Each drill runs when something it exercises changed, and always on the schedule. Both take
+  # minutes; a README change should cost neither.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    outputs:
+      restore: ${{ steps.filter.outputs.restore }}
+      rollout: ${{ steps.filter.outputs.rollout }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - id: filter
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          filters: |
+            restore:
+              - 'deploy/k8s/base/postgres/**'
+              - 'services/api/src/main/resources/db/migration/**'
+              - 'scripts/restore-drill.sh'
+              - 'scripts/lib.sh'
+              - '.github/workflows/drills.yml'
+            rollout:
+              - 'services/**'
+              - 'deploy/k8s/base/**'
+              - 'deploy/k8s/overlays/dev/**'
+              - 'load/k6/rollout.js'
+              - 'scripts/zero-downtime-drill.sh'
+              - 'scripts/lib.sh'
+              - '.github/workflows/drills.yml'
+
   restore:
     name: restore
     runs-on: ubuntu-24.04
+    needs: changes
+    if: >-
+      !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || needs.changes.outputs.restore == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -63,11 +89,64 @@ jobs:
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
+  rollout:
+    name: zero-downtime rollout
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: >-
+      !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || needs.changes.outputs.rollout == 'true')
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Both are on GitHub's runner image, at whatever versions the image was last built with.
+      # The drill is a claim about Kubernetes 1.33, the minor k3s runs, so the tools are pinned
+      # and checked against their published checksums like every other binary this pipeline
+      # runs. The node image itself is pinned by digest in the script.
+      - name: Install kind and kubectl
+        env:
+          KIND_VERSION: v0.32.0
+          KIND_SHA256: 50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
+          KUBECTL_VERSION: v1.33.13
+          KUBECTL_SHA256: 316d712726d857c20744c57cb36aa47cfc79bc0af7e82cebf3780244b654c073
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/bin"
+          mkdir -p "${bin}"
+          curl -fsSLo "${bin}/kind" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSLo "${bin}/kubectl" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KIND_SHA256}  ${bin}/kind" | sha256sum -c -
+          echo "${KUBECTL_SHA256}  ${bin}/kubectl" | sha256sum -c -
+          chmod +x "${bin}/kind" "${bin}/kubectl"
+          echo "${bin}" >> "${GITHUB_PATH}"
+
+      # Harsher than the local default: two complete rollouts rather than one, and half the
+      # requests writes, because a POST that fails is not retried by the client and a GET is.
+      # The load outlasts both rollouts, each of which waits out the old pods' drain window.
+      - name: Replace every API pod under load
+        env:
+          ROLLOUTS: "2"
+          WRITE_RATIO: "0.5"
+          DURATION: 330s
+        run: scripts/zero-downtime-drill.sh
+
+      # The replaced pods' last seconds and the load generator's per-request failures. The
+      # kubeconfig in the same directory is left behind: it names a cluster that no longer exists.
+      - name: Keep the evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rollout-drill
+          path: .rendered/drill/*.log
+          retention-days: 7
+
   # Single required check, as in the other workflows.
   drills:
     name: drills
     runs-on: ubuntu-24.04
-    needs: [restore]
+    needs: [changes, restore, rollout]
     if: always()
     steps:
       - name: Verify no upstream job failed

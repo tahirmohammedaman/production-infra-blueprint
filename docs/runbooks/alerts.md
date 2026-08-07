@@ -33,6 +33,7 @@ inventory summary that lags writes by more than ten seconds (`worker-freshness`)
 | Code | Who answered | Usually |
 | --- | --- | --- |
 | 503 | the gateway: no ready replica | readiness failing because Postgres or Redis is down, or every pod restarting |
+| 503, body titled `Database unavailable` | the API: no pooled connection within 3 s | overload or connections held by slow queries — [DatabasePoolExhausted](#databasepoolexhausted) |
 | 502, 504 | the gateway: a replica died or hung mid-request | OOM kills, a rollout without drain, a stuck thread pool |
 | 500 | the API | a bug. *Server errors by route* says which endpoint; the logs panel has the trace |
 
@@ -295,6 +296,19 @@ run repairs that.
 
 **Ticket.** Requests have been waiting for a pooled database connection for five minutes.
 Latency climbs before errors do; if it climbs far enough, the latency SLO pages.
+
+**Users are seeing** slow responses, and for any request that waits longer than the pool's
+three-second timeout, a 503 with `Retry-After: 5` and the problem title `Database unavailable`.
+It is a 503 rather than a 500 because the request did no work and a retry will most likely
+succeed; it still counts against the availability objective. Each one is logged with the pool's
+occupancy at that moment:
+
+```logql
+{service_name="api"} |= "no database connection available"
+```
+
+`total=8, active=8, idle=0, waiting=32` is a full pool with a queue behind it: find what holds the
+connections. `total=0` is a database the pool cannot reach at all, which is a different incident.
 
 **Look first:** what is holding the connections.
 
