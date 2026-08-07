@@ -1,0 +1,29 @@
+# The admission half of ADR 0008.
+#
+# Every image under ghcr.io/tahirmohammedaman/blueprint-* must carry a cosign signature made by
+# this repository's build workflow — on main or a release tag — with its certificate from Fulcio
+# and its entry in the Rekor transparency log. It is the same identity scripts/verify-image.sh
+# checks by hand, so the cluster and an engineer on call are asserting exactly one thing.
+#
+# Enforced in namespaces labelled policy.sigstore.dev/include=true: the application's own. Images
+# this repository does not build (Postgres, Redis, Kafka, rclone, the exporters) match no policy
+# and are admitted, because they are not signed by this workflow and never will be; they are
+# pinned by digest or upstream tag instead, and scanned where they run.
+#
+# Applied by infrastructure-configs, after the controller that serves the CRD, and before
+# apps-migrations starts the first pod that runs one of these images.
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata:
+  name: blueprint-images-signed-by-ci
+spec:
+  images:
+    - glob: "ghcr.io/tahirmohammedaman/blueprint-**"
+  authorities:
+    - keyless:
+        url: https://fulcio.sigstore.dev
+        identities:
+          - issuer: https://token.actions.githubusercontent.com
+            subjectRegExp: '^https://github\.com/tahirmohammedaman/production-infra-blueprint/\.github/workflows/build\.yml@refs/(heads/main|tags/v[0-9].*)$'
+      ctlog:
+        url: https://rekor.sigstore.dev

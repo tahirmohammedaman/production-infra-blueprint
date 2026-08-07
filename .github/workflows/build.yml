@@ -326,11 +326,20 @@ jobs:
       # Rekor, so there is no private key to store, rotate or leak. The cost is that
       # verification requires naming the expected identity, which is what
       # scripts/verify-image.sh does and what the cluster's admission policy asserts.
+      #
+      # In the legacy signature format, deliberately. cosign 3 writes a Sigstore bundle by
+      # default, found through the referrers API, and the admission controller the cluster runs
+      # (policy-controller v0.13) verifies bundles only for attestations: an image signed with
+      # the defaults is refused with "bundle support for image signatures is not yet
+      # implemented", which would have blocked every deploy. These two flags produce the
+      # sha256-<digest>.sig signature it does read. Found by testing admission in kind rather
+      # than trusting that a signed image is a verifiable one. Revisit when the controller is
+      # upgraded; `cosign verify` reads either format.
       - name: Sign
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/blueprint-${{ matrix.service }}
           DIGEST: ${{ steps.manifest.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --new-bundle-format=false --use-signing-config=false "${IMAGE}@${DIGEST}"
 
       - name: Generate an SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0

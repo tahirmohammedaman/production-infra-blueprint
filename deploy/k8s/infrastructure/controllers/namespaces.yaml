@@ -23,3 +23,10 @@ metadata:
   name: monitoring
   labels:
     app.kubernetes.io/part-of: blueprint-infrastructure
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cosign-system
+  labels:
+    app.kubernetes.io/part-of: blueprint-infrastructure

@@ -25,7 +25,7 @@ IMAGE="${1:-}"
 [ -n "$IMAGE" ] || die "usage: scripts/verify-image.sh <image-reference>"
 
 # Overridable so a fork can verify its own builds without editing the script.
-REPO="${BLUEPRINT_REPO:-tahir/production-infra-blueprint}"
+REPO="${BLUEPRINT_REPO:-tahirmohammedaman/production-infra-blueprint}"
 WORKFLOW_REF="${BLUEPRINT_WORKFLOW_REF:-https://github.com/${REPO}/.github/workflows/build.yml@refs/heads/main}"
 OIDC_ISSUER="${BLUEPRINT_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 

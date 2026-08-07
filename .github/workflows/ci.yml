@@ -77,6 +77,7 @@ jobs:
               - 'deploy/k8s/**'
               - 'clusters/**'
               - '.sops.yaml'
+              - 'scripts/render-manifests.sh'
               # Rendered into ConfigMaps by the observability kustomization.
               - 'observability/**'
             observability:
@@ -200,18 +201,9 @@ jobs:
       - name: Render and validate
         run: |
           set -euo pipefail
-          mkdir -p rendered
-
-          # Digest-pinned, like every other tool this pipeline runs.
-          kustomize() {
-            docker run --rm -v "${PWD}:/k:ro"               registry.k8s.io/kustomize/kustomize@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429               build "/k/$1"
-          }
-
-          for path in deploy/k8s/base                       deploy/k8s/config/prod                       deploy/k8s/data/prod                       deploy/k8s/migrations/prod                       deploy/k8s/overlays/prod                       deploy/k8s/overlays/dev                       deploy/k8s/restore                       deploy/k8s/infrastructure/controllers                       deploy/k8s/infrastructure/configs                       deploy/k8s/infrastructure/observability                       observability; do
-            echo "::group::${path}"
-            kustomize "${path}" | tee "rendered/${path//\//-}.yaml" | head -1 >/dev/null
-            echo "::endgroup::"
-          done
+          # The list of kustomizations, and the pinned kustomize that renders them, live in
+          # one script shared with the Makefile and the checkov scan in security.yml.
+          scripts/render-manifests.sh rendered
 
           # Flux's own manifests are not produced by kustomize; validate them as they are.
           cp clusters/prod/*.yaml rendered/

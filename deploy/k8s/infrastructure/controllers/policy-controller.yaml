@@ -1,0 +1,73 @@
+# Sigstore policy-controller: the admission webhook that makes an unsigned image inert.
+#
+# ADR 0008's argument depends on it. CI pushes an image before scanning it — a multi-arch
+# manifest cannot be assembled otherwise — and signs it only if the scan passes. That is a control
+# only if the cluster refuses to run what was never signed, and until this existed nothing did:
+# the build workflow, the checkov configuration and verify-image.sh all described an admission
+# policy that was not in the cluster. Found writing docs/security.md, by looking for it.
+#
+# The policy itself is data, in deploy/k8s/infrastructure/configs/image-policy.yaml, applied once
+# this release has installed the CRD that defines it.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: sigstore
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://sigstore.github.io/helm-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: policy-controller
+  namespace: cosign-system
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: policy-controller
+      # 0.10.6 ships policy-controller v0.13.1, pinned inside the chart by digest.
+      version: "0.10.6"
+      sourceRef:
+        kind: HelmRepository
+        name: sigstore
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  # The chart's only image not pinned by digest belongs to a post-delete hook that tidies leases
+  # on uninstall. With hooks off it is never pulled; the leases it would have removed go with the
+  # namespace.
+  uninstall:
+    disableHooks: true
+  values:
+    webhook:
+      configData:
+        # An image no ClusterImagePolicy covers is admitted. Only this repository's images are
+        # signed by this repository; Postgres, Redis, Kafka and the exporters are pinned and
+        # scanned instead, and a default of deny would refuse the database.
+        no-match-policy: allow
+      # Fail closed. If the webhook cannot answer, no new pod starts in the application namespace
+      # — a rollout, a migration or a backup Job waits until it can. A policy that is skipped
+      # whenever its enforcer is down protects nothing on the day it matters.
+      failurePolicy: Fail
+      # One replica on one node. The chart's budget of one available pod would make the node
+      # impossible to drain, the same trap the dev overlay removes from the API.
+      podDisruptionBudget:
+        enabled: false
+      # 28 MiB working set, measured in kind while it verified keyless signatures. The chart
+      # asks for 128 MiB and caps CPU at 200m; the cap goes, as everywhere else here, because a
+      # throttled admission webhook shows up as every deploy timing out.
+      resources:
+        requests:
+          cpu: 20m
+          memory: 48Mi
+        limits:
+          cpu: null
+          memory: 128Mi

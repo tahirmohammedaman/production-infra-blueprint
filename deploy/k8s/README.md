@@ -20,8 +20,9 @@ overlays/dev/             a second namespace on the same cluster, one replica, n
 restore/                  the point-in-time restore Job: applied by hand from
                           docs/runbooks/db-restore.md, never by Flux
 infrastructure/
-  controllers/            Traefik and cert-manager as HelmReleases
-  configs/                the ACME ClusterIssuers, which need cert-manager's CRDs first
+  controllers/            Traefik, cert-manager and Sigstore's policy-controller as HelmReleases
+  configs/                the ACME ClusterIssuers and the image signature policy, which need
+                          their controllers' CRDs first
   observability/          Prometheus, Alertmanager, Loki, Tempo, Alloy and Grafana as
                           HelmReleases, configured from ../../../observability
 ```

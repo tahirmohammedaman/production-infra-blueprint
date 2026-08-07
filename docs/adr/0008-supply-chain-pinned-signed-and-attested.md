@@ -1,7 +1,7 @@
 # 8. Every input is pinned, every output is signed
 
 Date: 2026-07-22
-Status: Accepted
+Status: Accepted; amended 2026-08-07 (see the end)
 
 ## Context
 
@@ -82,3 +82,28 @@ Nothing here verifies that the SHA we pinned was itself built from the source it
 build takes over thirty minutes, because Gradle and jlink are both CPU-bound; the native
 runner is the difference between a pipeline that runs on every push and one that gets
 disabled.
+
+## Amendment, 2026-08-07: the admission half did not exist
+
+This decision said an unsigned image is inert "because admission requires a valid signature",
+and the build workflow, the checkov configuration and `scripts/verify-image.sh` repeated it.
+Nothing in the cluster required one. The claim was written as if the control were part of the
+design, and no manifest ever implemented it; it was found by looking for the policy while
+documenting it. `verify-image.sh` had also been checking for an identity under the wrong
+repository owner, so it would have rejected every genuine image.
+
+Both are fixed. Sigstore's policy-controller now runs in the cluster, and
+`deploy/k8s/infrastructure/configs/image-policy.yaml` admits an image of ours into the
+application namespace only when its signature was made by `build.yml` in this repository. It
+fails closed.
+
+Testing it in a kind cluster found the next problem before production could: cosign 3 signs in
+the Sigstore bundle format by default, and the policy-controller release available verifies
+bundles only for attestations. Every image this pipeline published would have been refused at
+admission. The workflow now signs in the legacy format the controller reads; the SBOM
+attestation keeps the bundle format, which `cosign verify-attestation` reads either way. The
+test cases — a correctly signed image admitted; an unsigned image and one validly signed by
+another workflow both refused — are recorded in `docs/security.md`.
+
+The lesson generalises past this repository: a supply-chain control is a claim until something
+has been refused by it.

@@ -134,8 +134,20 @@ jobs:
       - name: Scan configuration
         run: |
           checkov --directory . \
-            --framework dockerfile,github_actions,kubernetes,kustomize,terraform \
+            --framework dockerfile,github_actions,kubernetes,terraform \
             --quiet --compact
+
+      # Kustomize output is scanned as the pinned kustomize renders it, not through checkov's own
+      # kustomize framework. That framework renders overlays in parallel into temporary paths
+      # named after each overlay's directory; four overlays here are called `prod`, their output
+      # collides, and the scan dies with "expected a single document in the stream" on some runs
+      # and hangs on others. It did so on this repository's tree from the day the prod overlays
+      # were split apart, and a scan that passes by luck is not a gate. What kustomize renders is
+      # also the better thing to scan: it is exactly what Flux applies.
+      - name: Scan the rendered manifests
+        run: |
+          scripts/render-manifests.sh rendered
+          checkov --directory rendered --framework kubernetes --quiet --compact
 
   # The only job that finds CVEs nobody introduced. It scans the images that are actually
   # published — the base layer included — so a vulnerability disclosed against Debian or the

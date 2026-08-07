@@ -256,42 +256,27 @@ ansible-lint: ## Lint the playbook at the production profile, as CI does
 
 # ------------------------------------------------------------------ kubernetes
 
-KUSTOMIZATIONS := \
-	deploy/k8s/base \
-	deploy/k8s/config/prod \
-	deploy/k8s/data/prod \
-	deploy/k8s/migrations/prod \
-	deploy/k8s/overlays/prod \
-	deploy/k8s/overlays/dev \
-	deploy/k8s/restore \
-	deploy/k8s/infrastructure/controllers \
-	deploy/k8s/infrastructure/configs \
-	deploy/k8s/infrastructure/observability \
-	observability
-
-KUSTOMIZE_IMAGE  := registry.k8s.io/kustomize/kustomize@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429
+MANIFESTS_DIR := .rendered/manifests
 KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform@sha256:5103f6f5e89061728aad4ad5a250627dd0fc9b2a92eb876f3762677a4222f9e0
+CHECKOV_IMAGE := docker.io/bridgecrew/checkov@sha256:c64ffb6d6fc8087c896341a2c697770a04a1cf558db04fa7b8129d8ca6bce336
 KUBERNETES_VERSION ?= 1.33.0
 
+# The list of kustomizations lives in the script, once, for this file and both workflows.
 .PHONY: k8s-build
-k8s-build: ## Render every kustomization to stdout
-	@for path in $(KUSTOMIZATIONS); do \
-		echo "--- $$path"; \
-		$(CONTAINER) run --rm -v "$(PWD)":/k:ro,z $(KUSTOMIZE_IMAGE) build "/k/$$path"; \
-	done
+k8s-build: ## Render every kustomization into .rendered/manifests
+	scripts/render-manifests.sh $(MANIFESTS_DIR)
 
 .PHONY: k8s-validate
-k8s-validate: ## Render every kustomization and check it against the Kubernetes schemas
-	@rm -rf .rendered && mkdir -p .rendered
-	@for path in $(KUSTOMIZATIONS); do \
-		$(CONTAINER) run --rm -v "$(PWD)":/k:ro,z $(KUSTOMIZE_IMAGE) build "/k/$$path" \
-			> ".rendered/$$(echo $$path | tr / -).yaml"; \
-	done
-	@cp clusters/prod/*.yaml .rendered/
-	$(CONTAINER) run --rm -v "$(PWD)/.rendered":/w:ro,z $(KUBECONFORM_IMAGE) \
+k8s-validate: k8s-build ## Render every kustomization and check it against the Kubernetes schemas
+	@cp clusters/prod/*.yaml $(MANIFESTS_DIR)/
+	$(CONTAINER) run --rm -v "$(PWD)/$(MANIFESTS_DIR)":/w:ro,z $(KUBECONFORM_IMAGE) \
 		-strict -summary -kubernetes-version $(KUBERNETES_VERSION) \
 		-ignore-missing-schemas -skip Secret /w
-	@rm -rf .rendered
+
+.PHONY: k8s-scan
+k8s-scan: k8s-build ## Scan the rendered manifests with checkov, as the security workflow does
+	$(CONTAINER) run --rm -v "$(PWD)":/src:ro,z -w /src $(CHECKOV_IMAGE) \
+		--directory $(MANIFESTS_DIR) --framework kubernetes --quiet --compact
 
 .PHONY: secrets-edit
 secrets-edit: ## Edit a SOPS-encrypted secret in place (FILE=deploy/k8s/config/prod/app-secrets.enc.yaml)

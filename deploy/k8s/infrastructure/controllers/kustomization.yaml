@@ -5,3 +5,4 @@ resources:
   - namespaces.yaml
   - cert-manager.yaml
   - traefik.yaml
+  - policy-controller.yaml
