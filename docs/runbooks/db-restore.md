@@ -195,13 +195,18 @@ The database went back in time. Nothing else did.
 `make restore-drill` runs steps 3 to 5 against containers, with production's configuration and
 scripts and an S3 server standing in for the bucket. CI runs it weekly with 100,000 rows.
 
-| Measurement | Local, 20,000 rows (27 MB) |
-| --- | ---: |
-| Base backup, taken and uploaded | 2.0 s |
-| Base backup in object storage | 5.3 MB |
-| Fetch and verify the base backup | 1.6 s |
-| Until promoted and writable | 5.6 s |
-| A timed-out WAL segment in object storage | 16 KB of 16 MB |
+| Measurement | 30,000 rows (27 MB) | 300,000 rows (205 MB) |
+| --- | ---: | ---: |
+| Base backup, taken and uploaded | 2.0 s | 4.0 s |
+| Base backup in object storage | 5.3 MB | 15.2 MB |
+| WAL archived by the drill | 11 MB | 80 MB |
+| Fetch and verify the base backup | 1.6 s | 2.6 s |
+| Until promoted and writable | 5.6 s | 10.6 s |
+| A timed-out WAL segment in object storage | 16 KB of 16 MB | 16 KB of 16 MB |
+
+Restore time grows with the WAL to replay far more than with the base backup: the base backup
+took one second more at seven times the size, the whole restore five. That is the argument for a
+daily base backup rather than a weekly one.
 
 The procedure itself — steps 1 to 5, command by command, minus the Flux lines — was run against
 these manifests in a kind cluster, with the StatefulSet archiving, the CronJob backing up and the

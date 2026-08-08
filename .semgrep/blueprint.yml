@@ -1,6 +1,6 @@
 # Rules specific to this repository.
 #
-# The community rulesets cover the generic classes of bug. These four encode invariants
+# The community rulesets cover the generic classes of bug. These five encode invariants
 # this codebase actually depends on, three of which were defects here before they were
 # rules. A convention that lives only in a reviewer's memory is not enforced.
 
@@ -53,6 +53,28 @@ rules:
       include:
         - '**/application*.yml'
     pattern-regex: 'readiness:\s*\n\s*include:[^\n]*kafka'
+
+  # The migration Job runs before the rollout, so the previous release serves traffic against
+  # every new schema. A migration that removes or changes what it uses breaks the pods that
+  # have not rolled yet, and every rollback.
+  - id: blueprint-migration-must-be-expand-only
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Migrations must keep the previous release working: they add, and never drop, rename,
+      retype, or add NOT NULL without a default in the same release as the code that stops
+      needing it. Split the change into expand and contract steps across releases. A contract
+      step that is safe now is marked with a nosemgrep comment and the reason on the line before
+      it. See docs/runbooks/zero-downtime-migration.md.
+    paths:
+      include:
+        - '/services/*/src/main/resources/db/migration/*.sql'
+    pattern-either:
+      - pattern-regex: '(?i)\bDROP\s+(TABLE|COLUMN)\b'
+      - pattern-regex: '(?i)\bRENAME\s+(COLUMN\b|TO\b)'
+      - pattern-regex: '(?i)\bALTER\s+COLUMN\s+\S+\s+(SET\s+DATA\s+)?TYPE\b'
+      - pattern-regex: '(?i)\bALTER\s+COLUMN\s+\S+\s+SET\s+NOT\s+NULL\b'
+      - pattern-regex: '(?i)\bADD\s+(COLUMN\s+)?\S+\s+[^,;]*\bNOT\s+NULL\b(?![^,;]*\bDEFAULT\b)'
 
   - id: blueprint-no-plaintext-password-env
     languages: [generic]

@@ -87,7 +87,7 @@ have to track job names.
 | Workflow | Runs on | What it gates |
 | --- | --- | --- |
 | `ci.yml` | PR, main | Formatting, workflow and shell lint, tests against real Postgres/Redis/Kafka, per-service coverage thresholds |
-| `security.yml` | PR, main, weekly | Secret history, semgrep (community rules plus four written for this repository), hadolint, trivy config, checkov, and a weekly re-scan of the *published* images |
+| `security.yml` | PR, main, weekly | Secret history, semgrep (community rules plus five written for this repository), hadolint, trivy config, checkov on the rendered manifests, and a weekly re-scan of the *published* images |
 | `build.yml` | PR, main, tags | PR: one architecture built, scanned and measured against a size budget. main: amd64 and arm64 built on native runners, joined into one manifest, scanned, then signed with cosign and attested with an SPDX SBOM and SLSA provenance |
 
 Two properties worth knowing about:
@@ -192,8 +192,9 @@ make flux-status      # what the cluster thinks it is running
   behind each number, and unit tests showing when every alert fires and when it stays quiet.
 - **`scripts/zero-downtime-drill.sh`** — the zero-downtime claim, tested: every API pod replaced
   under constant load in a real cluster, failing on a single dropped request.
-- **`.semgrep/blueprint.yml`** — four rules that encode invariants this system depends on.
-  Three of them were defects here before they were rules.
+- **`.semgrep/blueprint.yml`** — five rules that encode invariants this system depends on.
+  Three of them were defects here before they were rules; the fifth fails a migration that the
+  release still serving could not survive.
 
 ## Documentation
 
