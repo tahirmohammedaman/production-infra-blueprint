@@ -4,14 +4,20 @@ A reference repository that takes a small distributed system from `git push` to 
 monitored, alerting, zero-downtime production deployment — and shows what it costs to run.
 
 The point is not that it uses Kubernetes. The point is that every layer is provisioned,
-built, deployed, observed and operated from code in this repository, that the resulting
-monthly bill is measured rather than assumed, and that the failure modes which only appear
-once services talk to each other are handled rather than hoped away.
+built, deployed, observed, backed up and operated from code in this repository, that the
+resulting monthly bill is measured rather than assumed, and that the failure modes which only
+appear once services talk to each other are handled rather than hoped away.
+
+**The bill:** one €10.49 ARM node and €6.63 of IP, volume and object storage — **€17.12 a
+month** for the application, its database, broker and cache, metrics, logs, traces and backups.
+The same architecture on AWS comes to about $168; the managed services and hosted observability a
+team would more usually reach for, about $650. `docs/cost-analysis.md` has the arithmetic, the
+sources, and what the comparison leaves out.
 
 ## Architecture
 
 ```
-  internet ──▶ Traefik ──▶ api ──┬──▶ Postgres        (system of record)
+  internet ──▶ Traefik ──▶ api ──┬──▶ Postgres        (system of record) ──▶ WAL + backups ──▶ object storage
                                  ├──▶ Redis           (cache + read model)
                                  └──▶ outbox table
                                           │
@@ -34,7 +40,14 @@ Four components, held at four. Each exists to demonstrate a specific operational
 | worker | At-least-once delivery, idempotency, bounded retry, dead-letter handling |
 | Postgres / Redis / Kafka | Three failure domains with three different health semantics |
 
+`docs/architecture.md` has the diagrams: the write path end to end, what users see when each
+component fails, where everything runs, and how a change reaches it.
+
 ## Quickstart
+
+Needs Docker or rootless podman with a compose implementation, about 2 GB of free memory, and
+ports 8080, 8081, 9090, 9091, 3000, 9093 and 9095. The first build compiles both services inside
+the image build and takes a few minutes; later builds reuse the layer cache.
 
 ```bash
 make bootstrap     # build, start everything, and prove it works
@@ -66,14 +79,16 @@ runtime and compose implementation it found. Docker and rootless podman are both
 | --- | --- |
 | Services | Java 21, Spring Boot 3.5 on virtual threads, Gradle multi-project |
 | Gateway | Traefik v3 |
-| Persistence | PostgreSQL 16, Spring Data JPA, Flyway |
+| Persistence | PostgreSQL 16, Spring Data JPA, Flyway (expand/contract, enforced in CI) |
 | Cache / read model | Redis 7 |
 | Messaging | Apache Kafka 4.x (KRaft, single broker) |
+| Backups | Continuous WAL archiving and nightly base backups to object storage; point-in-time restore drilled weekly |
 | Container | Multi-stage: layered JAR, `jlink` runtime, distroless non-root |
 | Local stack | Docker Compose / podman-compose |
 | Orchestration | k3s, Kustomize (base + overlays) |
 | Provisioning | Terraform (Hetzner Cloud), Ansible |
 | Delivery | GitHub Actions (build, scan, sign) → Flux v2 (reconcile) |
+| Admission | Sigstore policy-controller: an image of ours runs only if this repository's CI signed it |
 | Certificates | cert-manager + Let's Encrypt (http-01) |
 | Secrets | SOPS + age, encrypted in git, decrypted in-cluster |
 | Metrics / logs / traces | Prometheus + Alertmanager, Loki + Alloy, Tempo |
@@ -81,22 +96,27 @@ runtime and compose implementation it found. Docker and rootless podman are both
 
 ## Delivery pipeline
 
-Three workflows, each with a single required status check so branch protection does not
+Four workflows, each with a single required status check so branch protection does not
 have to track job names.
 
 | Workflow | Runs on | What it gates |
 | --- | --- | --- |
-| `ci.yml` | PR, main | Formatting, workflow and shell lint, tests against real Postgres/Redis/Kafka, per-service coverage thresholds |
+| `ci.yml` | PR, main | Formatting, workflow and shell lint, tests against real Postgres/Redis/Kafka, per-service coverage thresholds, every manifest against the Kubernetes schemas |
 | `security.yml` | PR, main, weekly | Secret history, semgrep (community rules plus five written for this repository), hadolint, trivy config, checkov on the rendered manifests, and a weekly re-scan of the *published* images |
 | `build.yml` | PR, main, tags | PR: one architecture built, scanned and measured against a size budget. main: amd64 and arm64 built on native runners, joined into one manifest, scanned, then signed with cosign and attested with an SPDX SBOM and SLSA provenance |
+| `drills.yml` | PR when relevant, main, weekly | A point-in-time restore from backups that must lose no row and keep none it should not, and a rolling restart of every API pod under load in a real cluster that must fail no request |
 
-Two properties worth knowing about:
+Three properties worth knowing about:
 
 - **A change to one service does not rebuild the other.** `platform` is shared, so touching
   it fans back out to both — but a worker-only change never starts the API's test stack.
-- **Nothing is signed until it passes.** The image is pushed before it is scanned, because a
-  multi-arch manifest cannot be assembled otherwise. The gate is the signature: an image
-  that fails the scan is never signed, and admission requires one.
+- **Nothing is signed until it passes, and nothing unsigned runs.** The image is pushed before
+  it is scanned, because a multi-arch manifest cannot be assembled otherwise. The gate is the
+  signature: an image that fails the scan is never signed, and the cluster's admission webhook
+  refuses any image of ours this workflow did not sign — including one validly signed by some
+  other workflow.
+- **The drills run on a schedule, not only on change.** The base images, the object store's
+  API and the node image all move without a commit here.
 
 ```bash
 make verify-pins                                      # every action pinned to a commit SHA
@@ -112,6 +132,8 @@ by any GitHub Actions workflow anywhere, which looks like a control and is not o
 
 Nothing here pages because a number crossed a line. It pages when users are affected, or when
 a failure would otherwise be invisible.
+
+![The Blueprint / Overview dashboard under steady load: objectives, gateway, routes, exemplars and the connection pool](docs/images/grafana-overview.png)
 
 - **Three objectives.** Availability and latency are measured at the gateway, which is the only
   place a request that never reached the API is counted. Freshness of the read model is
@@ -129,7 +151,8 @@ a failure would otherwise be invisible.
   - histograms that publish only the SLO thresholds;
   - scheduled-task and probe spans dropped before export.
 
-  `docs/cost-analysis.md` has what they saved.
+  `docs/cost-analysis.md` has what they saved, and what a hosted vendor would charge for the
+  same signals at this system's measured 1,101 log bytes and 1.48 log lines per request.
 
 One set of files serves both environments. Compose mounts them, and the cluster receives them as
 ConfigMaps. See `observability/README.md`.
@@ -148,7 +171,7 @@ inside the cluster, pulls from this repository and reconciles. No kubeconfig and
 credential exists in any workflow.
 
 ```
-deploy/k8s/     kustomize: base, config, migrations, prod and dev overlays, infrastructure
+deploy/k8s/     kustomize: base, config, data, migrations, prod and dev overlays, infrastructure
 clusters/prod/  what Flux reconciles, and in what order
 infra/terraform hcloud: node, network, firewall, volume, object storage, DNS
 infra/ansible   node hardening and the k3s bootstrap
@@ -158,13 +181,18 @@ Reconciliation order is data, not a deploy script:
 
 ```
 infrastructure-controllers → infrastructure-configs → apps-config → apps-data → apps-migrations → apps
-   Traefik, cert-manager       ACME issuers         ns, secrets,  Postgres,     Flyway Job     rollout
-                                                    network policy Redis, Kafka
+   Traefik, cert-manager,      ACME issuers,        ns, secrets,  Postgres,     Flyway Job     rollout
+   policy-controller           image policy         network policy Redis, Kafka
 ```
 
 Each stage waits for the previous one to be *healthy*, not merely applied. The migration Job
 is its own stage so the rollout cannot begin until the schema change has finished — which is
-what makes an expand/contract deploy safe rather than optimistic.
+what makes an expand/contract deploy safe rather than optimistic. A semgrep rule fails any
+migration that the release still serving could not survive.
+
+Postgres archives every WAL segment to object storage within five minutes and takes a base
+backup every night. `docs/runbooks/db-restore.md` restores it to any second in the last fourteen
+days, and has been run command by command against these manifests.
 
 Secrets are SOPS-encrypted in git and decrypted by Flux inside the cluster; the age private
 key is not in this repository. Image tags are rewritten by Flux's image automation and
@@ -174,24 +202,57 @@ committed, so the repository always describes what is actually running.
 make tf-plan          # what terraform would change
 make provision-check  # what ansible would change
 make k8s-validate     # render every kustomization, check against the real schemas
+make k8s-scan         # scan the rendered manifests, as the security workflow does
 make flux-status      # what the cluster thinks it is running
 ```
 
+## What running it found
+
+Every layer here passed its linters and validators before it first ran, and most of the
+defects below were invisible to all of them. Each was found by running the thing, and each is
+fixed, tested and written up where it was found.
+
+- **The outbox lost events.** A two-minute broker outage used up every pending event's retries
+  and stranded them, which contradicted the architecture's central claim. Found by stopping Kafka
+  under load; now an outage costs events nothing, and a 150-second one drains 12 seconds after
+  the broker returns.
+- **The zero-downtime claim was false as shipped.** A pause before SIGTERM does nothing about
+  keep-alive connections; 4 of 11,972 requests failed during rollouts, all of them writes. The
+  preStop hook now drains connections first: 0 failed of 6,001 in the latest run.
+- **A fresh cluster would never have come up.** The migration Job waited for a database that only
+  a later stage created, and default-deny network policy blocked both Jobs.
+- **An availability SLI computed in the application read 100% through a total outage,** because
+  the gateway's own 503s never reach it. The objectives are measured at the gateway.
+- **The admission policy the supply chain relied on did not exist,** and once it did, it would
+  have refused every image CI publishes: cosign 3 signs in a format the admission controller
+  cannot read for image signatures. Found by testing admission, not by reading about it.
+- **The restore would have failed at the worst moment.** Postgres rejects a recovery target
+  written with `Z` for UTC while it starts. Found by the restore drill, before anyone needed a
+  restore.
+- **The configuration scanner passed by luck.** checkov's kustomize renderer crashed on this
+  tree on some runs and hung on others; it now scans what kustomize renders.
+
+`deploy/k8s/README.md` has the cluster's list in full.
+
 ## What to look at first
 
-- **`docs/cost-analysis.md`** — every performance and footprint number in this repository,
-  with the method used to measure it. Image size went from 523 MB to 170 MB; a code-only
-  deploy ships a 33 KB layer.
+- **`docs/cost-analysis.md`** — every footprint number in this repository with the method used to
+  measure it, and the monthly bill against two AWS builds, line by line. Image size went from
+  523 MB to 170 MB; a code-only deploy ships a 33 KB layer.
+- **`docs/operations.md`** — what fits on the node, the connection budget, what runs on a
+  schedule, and a plain list of what has been exercised and where — including what has not yet
+  run against a live Hetzner project.
+- **`docs/security.md`** — the controls layer by layer, the admission test results, and the known
+  gaps, stated rather than left to be found.
 - **`docs/adr/`** — the decisions that were close calls, including the ones that cost
   something. ADR 0004 explains why Kafka was chosen despite being the most expensive line
-  in the budget.
+  in the budget; ADR 0009 why backups need no operator and no derived image.
 - **`services/api/src/main/java/dev/tahir/blueprint/outbox/`** — the transactional outbox,
   the reason a broker outage cannot corrupt state or take the API down.
-- **`scripts/smoke-test.sh`** — what "working" is defined as, in executable form.
+- **`scripts/zero-downtime-drill.sh` and `scripts/restore-drill.sh`** — the zero-downtime and
+  point-in-time restore claims, each tested by causing the failure, each run weekly in CI.
 - **`docs/slo.md` and `observability/prometheus/tests/`** — three objectives, the reasoning
   behind each number, and unit tests showing when every alert fires and when it stays quiet.
-- **`scripts/zero-downtime-drill.sh`** — the zero-downtime claim, tested: every API pod replaced
-  under constant load in a real cluster, failing on a single dropped request.
 - **`.semgrep/blueprint.yml`** — five rules that encode invariants this system depends on.
   Three of them were defects here before they were rules; the fifth fails a migration that the
   release still serving could not survive.
@@ -200,12 +261,15 @@ make flux-status      # what the cluster thinks it is running
 
 | | |
 | --- | --- |
-| `docs/architecture.md` | How the pieces fit and why |
-| `docs/cost-analysis.md` | Measured footprint and the hosting comparison |
-| `docs/security.md` | Hardening measures and the threat model they address |
-| `docs/operations.md` | Running it: sizing, tuning, capacity |
-| `docs/adr/` | Architecture decision records |
-| `docs/runbooks/` | Incident procedures, written for whoever is on call |
+| `docs/architecture.md` | How the pieces fit, what happens when each fails, where it runs |
+| `docs/cost-analysis.md` | Measured footprint, the monthly bill, and the hosting comparison |
+| `docs/security.md` | Controls, the threat model they address, and the known gaps |
+| `docs/operations.md` | Sizing, capacity, changing things, schedules, what has been run |
+| `docs/slo.md` | The objectives, the error budget and its policy |
+| `docs/adr/` | Architecture decision records, 0001 to 0010 |
+| `docs/runbooks/` | `incident-triage`, `alerts`, `rollback`, `db-restore`, `cert-expiry` and `zero-downtime-migration` — written for whoever is on call |
+
+![The Blueprint / SLOs dashboard: each objective's 30-day SLI, remaining budget, and burn rate](docs/images/grafana-slo.png)
 
 ## License
 

@@ -6,7 +6,7 @@
 # where the storage bill is actually decided — is code rather than a console setting nobody
 # remembers changing.
 #
-# Why Hetzner Object Storage and not S3: €5.99/month for 1 TB with 1 TB of egress included.
+# Why Hetzner Object Storage and not S3: €4.99/month for 1 TB with 1 TB of egress included.
 # The equivalent on S3 is roughly $23 for storage plus $90 per TB egressed. Loki reads
 # chunks back on every query over old data, so egress is not a rounding error here.
 

@@ -24,16 +24,18 @@ output "object_storage_bucket" {
 }
 
 # The cost argument, computed rather than asserted. These are Hetzner's published list
-# prices (EUR, excl. VAT, as of July 2026); they are not fetched from an API, so they are as
-# current as the last person to read the pricing page. The point is that the number moves
-# when the infrastructure moves, instead of living in a README that goes stale silently.
+# prices (EUR, excl. VAT, Germany, after the price adjustment of 15 June 2026); they are not
+# fetched from an API, so they are as current as the last person to read the pricing page.
+# The first version of this output was not: it carried pre-adjustment figures, and the node
+# line was wrong by 39%. The point is that the number moves when the infrastructure moves,
+# which only holds if someone moves the prices too.
 output "estimated_monthly_eur" {
   description = "Rough monthly cost of everything in this configuration"
   value = {
-    node            = var.server_type == "cax21" ? 7.55 : null
-    primary_ipv4    = 0.60
-    data_volume     = var.data_volume_size * 0.048
-    object_storage  = 5.99
+    node            = lookup({ cax11 = 5.99, cax21 = 10.49, cax31 = 20.99 }, var.server_type, null)
+    primary_ipv4    = 0.50
+    data_volume     = var.data_volume_size * 0.0572
+    object_storage  = 4.99
     private_network = 0.00
     dns             = 0.00
     total_hint      = "node + ipv4 + volume + object storage; see docs/cost-analysis.md for the comparison"

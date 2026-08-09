@@ -508,7 +508,8 @@
             "axisPlacement": "auto",
             "thresholdsStyle": {
               "mode": "line+area"
-            }
+            },
+            "axisSoftMax": 0.01
           },
           "color": {
             "mode": "palette-classic"

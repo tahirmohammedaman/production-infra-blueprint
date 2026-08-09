@@ -81,8 +81,10 @@ spec:
             capabilities:
               drop: [ALL]
 
-          # 65 MiB peak in scripts/restore-drill.sh, most of it page cache from writing the
-          # extracted data directory; reclaimable, so the limit does not grow with the database.
+          # Peak in scripts/restore-drill.sh: 65 MiB restoring a 27 MB database, 145 MiB for
+          # 205 MB. Almost all of it is page cache from writing the extracted data directory,
+          # which the kernel reclaims under the limit rather than killing the container for, so
+          # a larger database makes the restore slower here, not impossible.
           resources:
             requests:
               cpu: 100m
