@@ -1,0 +1,81 @@
+---
+// One sheet: sidebar, header, the page's own content, contents rail, and the title block.
+
+import Base from './Base.astro';
+import Sidebar from '../components/Sidebar.astro';
+import Toc from '../components/Toc.astro';
+import SheetFooter from '../components/SheetFooter.astro';
+import Mermaid from '../components/Mermaid.astro';
+import type { Heading, RenderedDoc } from '../lib/markdown';
+import { pageIndex } from '../lib/content';
+import { githubUrl, withBase } from '../lib/paths';
+
+interface Props {
+  title: string;
+  route: string;
+  description?: string;
+  /** Plain-HTML introduction under the title, for pages written for the site. */
+  intro?: string;
+  headings?: Heading[];
+  source?: string;
+  kind?: RenderedDoc['kind'];
+  meta?: RenderedDoc['meta'];
+  minutes?: number;
+  mermaid?: boolean;
+  toc?: boolean;
+  /** The page supplies its own header in the "hero" slot. */
+  hero?: boolean;
+}
+
+const { title, route, description, intro, headings = [], source, kind = 'doc', meta = {}, minutes, mermaid = false, toc = true, hero = false } = Astro.props;
+
+const pages = await pageIndex();
+const entry = pages.find((p) => p.route === route);
+if (!entry) throw new Error(`${route} is not in the navigation in src/config.ts`);
+const parent = entry.parent ? pages.find((p) => p.route === entry.parent) : undefined;
+
+const statusTone = (status: string) => (/^accepted/i.test(status) ? 'pill-ok' : /superseded|deprecated|rejected/i.test(status) ? 'pill-crit' : 'pill-warn');
+const showToc = toc && headings.length > 1;
+---
+
+<Base title={title} description={description}>
+  <div class:list={['frame', { 'no-toc': !showToc }]}>
+    <Sidebar route={route} />
+
+    <main class="main" id="content" tabindex="-1">
+      <slot name="hero" />
+      {!hero && (<header class="page-header">
+        <ul class="eyebrow">
+          <li>{entry.groupNumber} · {entry.groupTitle}</li>
+          {parent && <li><a href={withBase(parent.route)}>{parent.title}</a></li>}
+          {source && <li><a href={githubUrl(source)} rel="noopener">{source}</a></li>}
+          {minutes && <li>{minutes} min read</li>}
+        </ul>
+        <h1 class="page-title">
+          {kind === 'adr' && meta.number && <span class="adr-number">ADR {meta.number}</span>}
+          {title}
+        </h1>
+        {intro && <p class="page-intro" set:html={intro} />}
+        {
+          (meta.status || meta.date) && (
+            <div class="page-meta">
+              {meta.status && <span class:list={['pill', statusTone(meta.status)]}>{meta.status}</span>}
+              {meta.date && <span class="pill">{meta.date}</span>}
+            </div>
+          )
+        }
+        <slot name="header" />
+      </header>)}
+
+      <div class="prose">
+        <slot />
+      </div>
+
+      <SheetFooter route={route} title={title} source={source} />
+    </main>
+
+    {showToc && <Toc headings={headings} source={source} />}
+  </div>
+</Base>
+
+{mermaid && <Mermaid />}

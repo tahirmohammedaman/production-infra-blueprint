@@ -1,0 +1,89 @@
+---
+// Draws the mermaid diagrams on a page, in the page's own palette. Mermaid is large and only
+// architecture.md uses it, so it is a separate chunk loaded after the text, on the pages that
+// render this component. The source stays visible until the drawing replaces it.
+---
+
+<script>
+  const figures = [...document.querySelectorAll<HTMLElement>('.diagram-mermaid')];
+
+  function token(name: string): string {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  async function draw() {
+    const { default: mermaid } = await import('mermaid');
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: 'base',
+      fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
+      // Natural size, scrolling inside the frame: scaled to the column, a wide flowchart's
+      // labels shrink below reading size.
+      flowchart: { curve: 'linear', padding: 14, nodeSpacing: 42, rankSpacing: 52, useMaxWidth: false },
+      sequence: { mirrorActors: false, actorMargin: 42, useMaxWidth: false },
+      themeVariables: {
+        darkMode: document.documentElement.dataset.theme !== 'light',
+        fontSize: '13px',
+        background: token('--surface'),
+        primaryColor: token('--surface'),
+        primaryTextColor: token('--ink'),
+        primaryBorderColor: token('--accent'),
+        secondaryColor: token('--surface-2'),
+        secondaryTextColor: token('--ink'),
+        secondaryBorderColor: token('--ink-3'),
+        tertiaryColor: token('--paper'),
+        tertiaryTextColor: token('--ink'),
+        tertiaryBorderColor: token('--rule'),
+        lineColor: token('--ink-3'),
+        textColor: token('--ink-2'),
+        mainBkg: token('--surface'),
+        nodeBorder: token('--accent'),
+        clusterBkg: token('--paper'),
+        clusterBorder: token('--rule'),
+        titleColor: token('--ink-2'),
+        edgeLabelBackground: token('--surface'),
+        actorBkg: token('--surface'),
+        actorBorder: token('--accent'),
+        actorTextColor: token('--ink'),
+        actorLineColor: token('--rule'),
+        signalColor: token('--ink-2'),
+        signalTextColor: token('--ink'),
+        labelBoxBkgColor: token('--surface-2'),
+        labelBoxBorderColor: token('--rule'),
+        labelTextColor: token('--ink'),
+        loopTextColor: token('--ink-2'),
+        noteBkgColor: token('--accent-bg'),
+        noteBorderColor: token('--accent'),
+        noteTextColor: token('--ink'),
+        activationBkgColor: token('--surface-2'),
+        sequenceNumberColor: token('--paper'),
+      },
+    });
+    for (const [i, figure] of figures.entries()) {
+      const source = figure.querySelector('.mermaid-source')?.textContent ?? '';
+      try {
+        const { svg } = await mermaid.render(`mermaid-${i}-${Date.now()}`, source);
+        figure.querySelector('svg')?.remove();
+        figure.insertAdjacentHTML('beforeend', svg);
+        // Fit the column where that keeps labels readable; below three quarters of natural size,
+        // scroll instead of shrinking further.
+        const drawn = figure.querySelector('svg');
+        if (drawn) {
+          const natural = drawn.viewBox.baseVal.width || drawn.getBoundingClientRect().width;
+          const available = figure.clientWidth - 40;
+          drawn.style.width = `${Math.round(Math.min(natural, Math.max(available, natural * 0.75)))}px`;
+          drawn.style.height = 'auto';
+          drawn.removeAttribute('height');
+        }
+        figure.dataset.rendered = '';
+      } catch (error) {
+        // Leave the source in place: a diagram that cannot be drawn is still readable as text.
+        console.error('mermaid: could not draw diagram', i, error);
+      }
+    }
+  }
+
+  void draw();
+  document.addEventListener('blueprint:theme', () => void draw());
+</script>

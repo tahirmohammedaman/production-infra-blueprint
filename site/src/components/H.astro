@@ -1,0 +1,19 @@
+---
+// A numbered, linkable heading for pages written for the site. Its text, id and number come
+// from src/lib/outlines.ts, which the contents rail and the search index read too.
+
+import type { OutlineSection } from '../lib/outlines';
+
+interface Props {
+  s: OutlineSection;
+}
+
+const { s } = Astro.props;
+const Tag = s.depth === 3 ? 'h3' : 'h2';
+---
+
+<Tag id={s.id}>
+  {s.index && <span class="h-index" aria-hidden="true">{s.index}</span>}
+  <span class="h-text">{s.text}</span>
+  <a class="h-anchor" href={`#${s.id}`} aria-label="Link to this section">#</a>
+</Tag>

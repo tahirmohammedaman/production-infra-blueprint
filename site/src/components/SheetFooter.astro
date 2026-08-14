@@ -1,0 +1,52 @@
+---
+import { site } from '../config';
+import { pageIndex } from '../lib/content';
+import { githubUrl, withBase } from '../lib/paths';
+
+interface Props {
+  route: string;
+  title: string;
+  source?: string;
+}
+
+const { route, title, source } = Astro.props;
+const pages = await pageIndex();
+const i = pages.findIndex((p) => p.route === route);
+const prev = i > 0 ? pages[i - 1] : undefined;
+const next = i >= 0 && i < pages.length - 1 ? pages[i + 1] : undefined;
+const label = (p: (typeof pages)[number]) => (p.number ? `ADR ${p.number} — ${p.title}` : p.title);
+const sheet = i >= 0 ? `${String(i + 1).padStart(2, '0')} / ${pages.length}` : '—';
+const project = site.repo.split('/').pop();
+---
+
+<footer>
+  <nav class="pager" aria-label="Previous and next sheets">
+    {
+      prev && (
+        <a class="prev" href={withBase(prev.route)} rel="prev">
+          <span>← Previous · {prev.groupTitle}</span>
+          <strong>{label(prev)}</strong>
+        </a>
+      )
+    }
+    {
+      next && (
+        <a class="next" href={withBase(next.route)} rel="next">
+          <span>Next · {next.groupTitle} →</span>
+          <strong>{label(next)}</strong>
+        </a>
+      )
+    }
+  </nav>
+
+  <dl class="title-block" aria-label="Sheet details">
+    <div><dt>Project</dt><dd>{project}</dd></div>
+    <div><dt>Sheet title</dt><dd>{title}</dd></div>
+    <div><dt>Sheet</dt><dd>{sheet}</dd></div>
+    <div><dt>Revision</dt><dd>{site.revision}</dd></div>
+    <div><dt>Drawn from</dt><dd>{source ? <a href={githubUrl(source)} rel="noopener">{source}</a> : 'written for this site'}</dd></div>
+    <div><dt>Repository</dt><dd><a href={site.repo} rel="noopener">github.com/{site.repo.split('github.com/')[1]}</a></dd></div>
+    <div><dt>License</dt><dd>MIT</dd></div>
+    <div><dt>Scale</dt><dd>one node</dd></div>
+  </dl>
+</footer>

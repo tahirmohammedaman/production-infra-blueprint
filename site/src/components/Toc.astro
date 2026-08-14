@@ -1,0 +1,69 @@
+---
+import type { Heading } from '../lib/markdown';
+import { githubUrl } from '../lib/paths';
+import { site } from '../config';
+
+interface Props {
+  headings: Heading[];
+  source?: string;
+}
+
+const { headings, source } = Astro.props;
+---
+
+<aside class="toc" aria-label="On this page">
+  {
+    headings.length > 0 && (
+      <>
+        <h2 class="toc-title">On this sheet</h2>
+        <ol>
+          {headings.map((h) => (
+            <li class={`depth-${h.depth}`}>
+              <a href={`#${h.id}`} data-toc-link={h.id}>
+                {h.depth === 2 && <i>{h.index ?? ''}</i>}
+                <span>{h.text}</span>
+              </a>
+            </li>
+          ))}
+        </ol>
+      </>
+    )
+  }
+  <div class="toc-source">
+    {source && <a href={githubUrl(source)} rel="noopener">View source ↗</a>}
+    {source && <a href={`${site.repo}/commits/${site.branch}/${source}`} rel="noopener">History ↗</a>}
+    <a href="#content">Back to top ↑</a>
+  </div>
+</aside>
+
+<script>
+  // Mark the section being read. The last heading above a line a third of the way down the
+  // viewport is the current one; that stays right for short sections the reader scrolls past.
+  const links = new Map<string, HTMLAnchorElement>();
+  document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]').forEach((a) => links.set(a.dataset.tocLink!, a));
+  const headings = [...links.keys()].map((id) => document.getElementById(id)).filter((h): h is HTMLElement => h !== null);
+
+  let ticking = false;
+  function update() {
+    ticking = false;
+    const line = window.innerHeight * 0.33;
+    let current = headings[0];
+    for (const h of headings) {
+      if (h.getBoundingClientRect().top <= line) current = h;
+      else break;
+    }
+    links.forEach((a) => a.removeAttribute('aria-current'));
+    if (current) links.get(current.id)?.setAttribute('aria-current', 'true');
+  }
+  if (headings.length > 0) {
+    window.addEventListener(
+      'scroll',
+      () => {
+        if (!ticking) requestAnimationFrame(update);
+        ticking = true;
+      },
+      { passive: true },
+    );
+    update();
+  }
+</script>

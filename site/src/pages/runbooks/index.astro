@@ -1,0 +1,51 @@
+---
+import Page from '../../layouts/Page.astro';
+import H from '../../components/H.astro';
+import { getCollection } from '../../lib/content';
+import { outlines, headingsFor } from '../../lib/outlines';
+import { withBase } from '../../lib/paths';
+
+const o = outlines['/runbooks/'];
+const runbooks = await getCollection('runbooks');
+
+const kicker: Record<string, string> = {
+  'incident-triage': 'Start here',
+  alerts: 'One section per alert',
+  rollback: 'A release is live and wrong',
+  'db-restore': 'The data is wrong or gone',
+  'cert-expiry': 'TLS is failing',
+  'zero-downtime-migration': 'Before writing a migration',
+};
+const stem = (source: string) => source.split('/').pop()!.replace(/\.md$/, '');
+---
+
+<Page
+  title="Runbooks"
+  route="/runbooks/"
+  headings={headingsFor('/runbooks/')}
+  source="docs/runbooks"
+  intro="Written for whoever is on call, at the hour they are likely to be reading. Each starts from what the reader can see, and every command in them has been run against these manifests."
+>
+  <H s={o.runbooks} />
+  <div class="cards">
+    {
+      runbooks.map((doc) => (
+        <a class="card" href={withBase(doc.route)}>
+          <span class="card-kicker">{kicker[stem(doc.source)] ?? 'Runbook'}</span>
+          <span class="card-title">{doc.title}</span>
+          <span class="card-body">{doc.summary}</span>
+          <span class="card-foot">{doc.source} · {doc.minutes} min</span>
+        </a>
+      ))
+    }
+  </div>
+
+  <H s={o.conventions} />
+  <ul>
+    <li><strong>Symptom first.</strong> Each runbook opens with what the reader is seeing, what they get back, and how long it takes — before any command.</li>
+    <li><strong>“Is this the right runbook?”</strong> comes before the procedure. A rollback does not undo a migration; a restore is the only procedure that throws data away.</li>
+    <li><strong>Cluster commands, with the local equivalent underneath</strong> where they differ, so the same page works against the Compose stack.</li>
+    <li><strong>Every alert’s <code>runbook_url</code></strong> points at its own section of the alerts runbook; adding an alert means adding its section in the same commit.</li>
+    <li><strong>They end with what stops it,</strong> and what to record afterwards — a missed page or a useless one is a defect in the rules, and gets a test.</li>
+  </ul>
+</Page>

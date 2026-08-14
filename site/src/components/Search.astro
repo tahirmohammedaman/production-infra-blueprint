@@ -1,0 +1,173 @@
+---
+import { withBase } from '../lib/paths';
+---
+
+<dialog class="search-dialog" data-search data-index={withBase('/search.json')} aria-label="Search">
+  <div class="search-field">
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <circle cx="7" cy="7" r="5"></circle>
+      <path d="m11 11 3.5 3.5"></path>
+    </svg>
+    <input
+      type="search"
+      placeholder="Search sheets, sections, alerts, runbooks…"
+      autocomplete="off"
+      spellcheck="false"
+      aria-label="Search the documentation"
+      aria-controls="search-results"
+      data-search-input
+    />
+    <kbd>esc</kbd>
+  </div>
+  <ul class="search-results" id="search-results" role="listbox" data-search-results></ul>
+  <p class="search-empty" data-search-empty hidden></p>
+  <div class="search-hint"><span>↑ ↓ to move</span><span>↵ to open</span><span>/ or ⌘K to search</span></div>
+</dialog>
+
+<script>
+  interface Entry {
+    title: string;
+    heading: string;
+    group: string;
+    url: string;
+    text: string;
+  }
+
+  const dialog = document.querySelector<HTMLDialogElement>('[data-search]')!;
+  const input = dialog.querySelector<HTMLInputElement>('[data-search-input]')!;
+  const list = dialog.querySelector<HTMLUListElement>('[data-search-results]')!;
+  const empty = dialog.querySelector<HTMLParagraphElement>('[data-search-empty]')!;
+  let index: Entry[] | undefined;
+  let selected = 0;
+
+  async function load(): Promise<Entry[]> {
+    if (!index) {
+      const response = await fetch(dialog.dataset.index!);
+      index = (await response.json()) as Entry[];
+    }
+    return index;
+  }
+
+  function open() {
+    if (dialog.open) return;
+    dialog.showModal();
+    input.select();
+    void load().then(() => render());
+  }
+
+  document.querySelectorAll('[data-search-open]').forEach((b) => b.addEventListener('click', open));
+  document.addEventListener('keydown', (e) => {
+    const typing = (e.target as Element).closest('input, textarea, [contenteditable]');
+    if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !typing)) {
+      e.preventDefault();
+      open();
+    }
+  });
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+
+  function score(entry: Entry, terms: string[]): number {
+    const title = entry.title.toLowerCase();
+    const heading = entry.heading.toLowerCase();
+    const text = entry.text.toLowerCase();
+    let total = 0;
+    for (const term of terms) {
+      const s = (title.includes(term) ? 6 : 0) + (heading.includes(term) ? 4 : 0) + (text.includes(term) ? 1 : 0);
+      if (s === 0) return 0;
+      total += s + (heading.startsWith(term) ? 2 : 0);
+    }
+    return total + (entry.heading === entry.title ? 1 : 0);
+  }
+
+  /** Append `value` to `parent`, wrapping each search term in <mark>. */
+  function highlight(parent: HTMLElement, value: string, terms: string[]) {
+    const pattern = new RegExp(`(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+    for (const part of value.split(pattern)) {
+      if (part === '') continue;
+      if (terms.includes(part.toLowerCase())) {
+        const mark = document.createElement('mark');
+        mark.textContent = part;
+        parent.append(mark);
+      } else {
+        parent.append(document.createTextNode(part));
+      }
+    }
+  }
+
+  function snippet(text: string, terms: string[]): string {
+    const lower = text.toLowerCase();
+    const hits = terms.map((t) => lower.indexOf(t)).filter((i) => i >= 0);
+    if (hits.length === 0) return text.slice(0, 160);
+    // Start at a word boundary a little before the first match.
+    let start = Math.max(0, Math.min(...hits) - 40);
+    if (start > 0) start = text.indexOf(' ', start) + 1 || start;
+    return (start > 0 ? '…' : '') + text.slice(start, start + 160);
+  }
+
+  function render() {
+    const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    list.replaceChildren();
+    selected = 0;
+    if (!index || terms.length === 0) {
+      empty.hidden = false;
+      empty.textContent = 'Try "restore", "burn rate", "outbox", "admission" or "€17".';
+      return;
+    }
+    const results = index
+      .map((entry) => ({ entry, s: score(entry, terms) }))
+      .filter((r) => r.s > 0)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 14);
+    empty.hidden = results.length > 0;
+    empty.textContent = results.length ? '' : `Nothing matches "${input.value}".`;
+    results.forEach(({ entry }, i) => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = entry.url;
+      a.setAttribute('role', 'option');
+      a.setAttribute('aria-selected', String(i === 0));
+      const path = document.createElement('span');
+      path.className = 'r-path';
+      path.textContent = entry.heading === entry.title ? entry.group : `${entry.group} · ${entry.title}`;
+      const title = document.createElement('span');
+      title.className = 'r-title';
+      highlight(title, entry.heading, terms);
+      a.append(path, title);
+      if (entry.text) {
+        const text = document.createElement('span');
+        text.className = 'r-text';
+        highlight(text, snippet(entry.text, terms), terms);
+        a.append(text);
+      }
+      a.addEventListener('click', () => dialog.close());
+      li.append(a);
+      list.append(li);
+    });
+  }
+
+  function move(delta: number) {
+    const options = [...list.querySelectorAll<HTMLAnchorElement>('a')];
+    if (options.length === 0) return;
+    selected = (selected + delta + options.length) % options.length;
+    options.forEach((o, i) => o.setAttribute('aria-selected', String(i === selected)));
+    options[selected].scrollIntoView({ block: 'nearest' });
+  }
+
+  input.addEventListener('input', render);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      move(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      move(-1);
+    } else if (e.key === 'Enter') {
+      const option = list.querySelectorAll<HTMLAnchorElement>('a')[selected];
+      if (option) {
+        dialog.close();
+        window.location.href = option.href;
+      }
+    }
+  });
+</script>

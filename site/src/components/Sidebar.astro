@@ -1,0 +1,51 @@
+---
+import { nav } from '../config';
+import { pageIndex } from '../lib/content';
+import { withBase } from '../lib/paths';
+
+interface Props {
+  route: string;
+}
+
+const { route } = Astro.props;
+const pages = await pageIndex();
+const childrenOf = (parent: string) => pages.filter((p) => p.parent === parent);
+---
+
+<nav class="sidebar" aria-label="Documentation">
+  {
+    nav.map((group, g) => (
+      <section class="nav-group">
+        <h2 class="nav-group-title">
+          <span>{String(g + 1).padStart(2, '0')}</span>
+          {group.title}
+        </h2>
+        <ul class="nav-list">
+          {group.items.map((item) => {
+            const children = item.collection ? childrenOf(item.route) : [];
+            const expanded = children.length > 0 && route.startsWith(item.route);
+            return (
+              <li>
+                <a class="nav-link" href={withBase(item.route)} aria-current={route === item.route ? 'page' : undefined}>
+                  {item.title}
+                </a>
+                {expanded && (
+                  <ul class="nav-children">
+                    {children.map((child) => (
+                      <li>
+                        <a class="nav-link" href={withBase(child.route)} aria-current={route === child.route ? 'page' : undefined}>
+                          <i>{child.number ?? '—'}</i>
+                          <span>{child.title}</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    ))
+  }
+</nav>

@@ -1,0 +1,65 @@
+---
+import Page from '../../layouts/Page.astro';
+import H from '../../components/H.astro';
+import { getCollection } from '../../lib/content';
+import { outlines, headingsFor } from '../../lib/outlines';
+import { withBase } from '../../lib/paths';
+
+const o = outlines['/decisions/'];
+const adrs = await getCollection('adr');
+
+const firstSentence = (text: string) => {
+  const m = /^(.+?[.!?])(\s|$)/.exec(text);
+  return m ? m[1] : text;
+};
+const decisionOf = (doc: (typeof adrs)[number]) =>
+  firstSentence(doc.sections.find((s) => /^decision$/i.test(s.heading))?.text ?? doc.summary);
+const tone = (status = '') => (/^accepted/i.test(status) ? 'pill-ok' : 'pill-warn');
+---
+
+<Page
+  title="Decision records"
+  route="/decisions/"
+  headings={headingsFor('/decisions/')}
+  source="docs/adr"
+  intro="The decisions that were close calls, including the ones that cost something. Each records what was considered, what was chosen, and what the choice gives up — so the trade-off stays visible after the reasons are forgotten."
+>
+  <H s={o.records} />
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>ADR</th><th>Decision</th><th>Date</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {
+          adrs.map((doc) => (
+            <tr>
+              <td class="mono"><a href={withBase(doc.route)}>{doc.meta.number}</a></td>
+              <td>
+                <a href={withBase(doc.route)}><strong>{doc.title}</strong></a>
+                <br />
+                <span>{decisionOf(doc)}</span>
+              </td>
+              <td class="mono" style="white-space: nowrap">{doc.meta.date?.split(',')[0]}</td>
+              <td><span class:list={['pill', tone(doc.meta.status)]}>{doc.meta.status?.split(';')[0]}</span></td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <H s={o['how-they-are-written']} />
+  <p>
+    Every record has the same three parts. <strong>Context</strong> is the problem and the options, usually as a table
+    with what each would cost here. <strong>Decision</strong> is one or two sentences. <strong>Consequences</strong> is
+    the longest part, and the one that matters: what the decision gives up, what it makes true elsewhere in the
+    repository, and when it should be revisited.
+  </p>
+  <p>
+    Records are amended rather than rewritten. <a href={withBase(adrs.find((d) => d.meta.number === '0008')!.route)}>ADR 0008</a>
+    carries an amendment dated after it was accepted, explaining that a control it described had never been implemented —
+    and what testing the implementation then found. A few were backfilled after the fact; their dates say both when the
+    decision was made and when it was recorded.
+  </p>
+</Page>

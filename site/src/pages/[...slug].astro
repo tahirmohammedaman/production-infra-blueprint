@@ -1,0 +1,27 @@
+---
+// Every page rendered from a markdown file in the repository.
+
+import Page from '../layouts/Page.astro';
+import { getDocs, type Doc } from '../lib/content';
+
+export async function getStaticPaths() {
+  const docs = await getDocs();
+  return docs.map((doc) => ({ params: { slug: doc.route.replace(/^\/|\/$/g, '') }, props: { doc } }));
+}
+
+const { doc } = Astro.props as { doc: Doc };
+---
+
+<Page
+  title={doc.title}
+  route={doc.route}
+  description={doc.summary}
+  headings={doc.headings}
+  source={doc.source}
+  kind={doc.kind}
+  meta={doc.meta}
+  minutes={doc.minutes}
+  mermaid={doc.html.includes('diagram-mermaid')}
+>
+  <Fragment set:html={doc.html} />
+</Page>
