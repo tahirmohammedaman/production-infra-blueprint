@@ -1,0 +1,279 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import SystemDiagram from '../components/diagrams/SystemDiagram.astro';
+import { site } from '../config';
+import { getCollection } from '../lib/content';
+import { outlines, headingsFor } from '../lib/outlines';
+import { withBase } from '../lib/paths';
+
+const o = outlines['/'];
+const adrs = await getCollection('adr');
+const runbooks = await getCollection('runbooks');
+const adr = (n: string) => withBase(adrs.find((d) => d.meta.number === n)!.route);
+const u = withBase;
+
+// Build B from docs/cost-analysis.md §7, folded to four slots.
+const managed = [
+  { label: 'Kafka (MSK, two brokers minimum)', value: 301.84, cls: 'c1' },
+  { label: 'Observability (Datadog)', value: 167.53, cls: 'c2' },
+  { label: 'EKS control plane', value: 73.0, cls: 'c3' },
+  { label: 'Node, load balancer, IPs, RDS, ElastiCache', value: 108.37, cls: 'c4' },
+];
+const managedTotal = managed.reduce((s, m) => s + m.value, 0);
+const usd = (v: number) => `$${v.toFixed(2)}`;
+---
+
+<Page title={site.title} route="/" hero headings={headingsFor('/')}>
+  <header class="hero" slot="hero">
+    <ul class="eyebrow">
+      <li>Reference architecture</li>
+      <li>Rev. {site.revision}</li>
+      <li>Hetzner CAX21 · k3s v1.33</li>
+      <li>{adrs.length} decision records · {runbooks.length} runbooks</li>
+    </ul>
+    <h1>{site.title}</h1>
+    <p class="page-intro">
+      A four-component distributed system taken from <b>git push</b> to a monitored, alerting, zero-downtime production
+      deployment — provisioned, built, deployed, observed, backed up and operated from one repository, with
+      <b>every footprint and cost figure measured rather than assumed</b>.
+    </p>
+    <div class="hero-actions">
+      <a class="button primary" href={u('/architecture/')}>Read the architecture →</a>
+      <a class="button" href={u('/quickstart/')}>Run it locally</a>
+      <a class="button" href={u('/findings/')}>What running it found</a>
+      <a class="button" href={site.repo} rel="noopener">Source ↗</a>
+    </div>
+    <dl class="stats">
+      <div class="stat"><dt>Monthly bill</dt><dd>€17.12<small>node, IP, volume, storage</small></dd></div>
+      <div class="stat"><dt>API image</dt><dd>170 MB<small>from 523 MB naive</small></dd></div>
+      <div class="stat"><dt>Code-only deploy</dt><dd>33 KB<small>the application layer</small></dd></div>
+      <div class="stat"><dt>Rollout failures</dt><dd>0<small>of 6,001 requests under load</small></dd></div>
+      <div class="stat"><dt>Alerts</dt><dd>21<small>each with a promtool test</small></dd></div>
+      <div class="stat"><dt>Point-in-time restore</dt><dd>12 s<small>stop to promoted, in kind</small></dd></div>
+    </dl>
+  </header>
+
+  <H s={o['what-it-is']} />
+  <p class="lede">
+    The point is not that it uses Kubernetes. It is that every layer is provisioned, built, deployed, observed, backed
+    up and operated from code in one repository, that the resulting monthly bill is measured rather than assumed, and
+    that the failure modes which only appear once services talk to each other are handled rather than hoped away.
+  </p>
+  <p>
+    The system is deliberately held at <strong>four components</strong>. A fifth would add surface without adding a new
+    operational problem to demonstrate; each of these earns its place by exposing one that the others structurally
+    cannot.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Component</th><th>Owns</th><th>Exists to demonstrate</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">Traefik</td><td>routing, TLS, the SLO measurement point</td><td>Service discovery that works the same way in Compose (labels) and Kubernetes (Ingress) — one component, not two answers.</td></tr>
+        <tr><td class="mono">api</td><td>the schema, the synchronous path, the outbox and its relay</td><td>Cache-aside reads, transactional writes, graceful drain, and readiness that means something.</td></tr>
+        <tr><td class="mono">worker</td><td>the inventory read model</td><td>At-least-once delivery, idempotency, bounded retry and a dead-letter topic that is actually inspected.</td></tr>
+        <tr><td class="mono">Postgres · Redis · Kafka</td><td>state</td><td>Three failure domains with three different consequences: one gates readiness, one degrades, one must never gate readiness at all.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p>
+      <strong>The load-bearing constraint.</strong> Java and Kafka are the expensive option in their categories. Rather
+      than hide that, the repository measures and pays it down in public: the image went from 523 MB to 170 MB, every
+      memory limit cites the resident size it was derived from, and Kafka's 1.4 GB — a third of the node's budget — is
+      recorded as the most expensive decision here (<a href={adr('0002')}>ADR 0002</a>,
+      <a href={adr('0004')}>ADR 0004</a>).
+    </p>
+  </div>
+
+  <H s={o['the-system']} />
+  <p>
+    A write commits the item and its event in one Postgres transaction. A relay publishes committed events to Kafka;
+    the worker consumes them idempotently and maintains a read model in Redis that the API serves back. Nothing writes to
+    two systems at once, so there is no state the two services can disagree about permanently.
+  </p>
+  <SystemDiagram />
+  <ul>
+    <li>
+      <strong>No dual write.</strong> The item and the event describing it commit together; there is no moment where
+      Postgres has the write and Kafka does not know (<a href={adr('0005')}>ADR 0005</a>).
+    </li>
+    <li>
+      <strong>A broker outage costs freshness and nothing else.</strong> Writes keep committing, the relay loses no
+      attempts while the broker is unreachable, and readiness excludes Kafka for exactly that reason
+      (<a href={adr('0007')}>ADR 0007</a>).
+    </li>
+    <li>
+      <strong>Delivery is at least once, and that is fine.</strong> A republished event is a no-op at the worker's
+      idempotency guard; a record that keeps failing goes to the dead-letter topic instead of blocking its partition.
+    </li>
+  </ul>
+  <p><a href={u('/architecture/')}>The write path end to end, the failure domains, and where it runs →</a></p>
+
+  <H s={o.claims} />
+  <p>
+    Every layer passed its linters and validators before it first ran, and most of the defects later found were invisible
+    to all of them. So each claim this repository makes is held up by something that causes the failure and checks the
+    outcome — most of them on a schedule, because a claim nobody has re-tested recently is a hope.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Claim</th><th>Tested by</th><th>Where</th><th>How often</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>A request crosses the whole system</td>
+          <td><code>scripts/smoke-test.sh</code>: 27 assertions, gateway to Postgres to Kafka to the worker, and back out of Redis</td>
+          <td>Compose, Docker and rootless podman</td>
+          <td>every <code>make bootstrap</code></td>
+        </tr>
+        <tr>
+          <td>A rollout fails no request</td>
+          <td><code>make drill</code>: every API pod replaced under constant load, half of it writes — 0 failed of 6,001</td>
+          <td>kind, the dev overlay</td>
+          <td><span class="pill pill-accent">weekly in CI</span></td>
+        </tr>
+        <tr>
+          <td>The database restores to any second</td>
+          <td><code>make restore-drill</code>: back up, destroy, restore; fails on one row lost or one kept that should not be</td>
+          <td>containers, production's config and scripts</td>
+          <td><span class="pill pill-accent">weekly in CI</span></td>
+        </tr>
+        <tr>
+          <td>A broker outage costs events nothing</td>
+          <td>Kafka stopped for 150 s under load: 15 of 15 writes succeeded, the backlog drained 12 s after it returned</td>
+          <td>Compose; the relay's unit tests hold the semantics</td>
+          <td>every change to the relay</td>
+        </tr>
+        <tr>
+          <td>Kafka never gates readiness</td>
+          <td>an integration test on the readiness group, and a semgrep rule on the configuration</td>
+          <td>CI</td>
+          <td>every change</td>
+        </tr>
+        <tr>
+          <td>Nothing unsigned of ours runs</td>
+          <td>admission test: a signed image admitted; unsigned, and signed by another workflow, refused</td>
+          <td>kind, production chart values</td>
+          <td>when the policy changes</td>
+        </tr>
+        <tr>
+          <td>Every alert fires when it should, and only then</td>
+          <td>promtool unit tests for all 21 alerts and the objectives</td>
+          <td>CI <code>observability</code> job</td>
+          <td>every change under <code>observability/</code></td>
+        </tr>
+        <tr>
+          <td>Every manifest is valid for its cluster</td>
+          <td>every kustomization rendered and checked strictly against the Kubernetes 1.33 schemas</td>
+          <td>CI <code>manifests</code> job</td>
+          <td>every change under <code>deploy/k8s/</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p>
+      <strong>Not yet exercised against a live Hetzner project:</strong> <code>terraform apply</code>, the Ansible
+      playbook on a real node, Flux bootstrapping from this repository, certificate issuance from Let's Encrypt, and Loki
+      and the WAL archive against Hetzner's object storage endpoint. Each is a first-deploy risk, stated in
+      <a href={u('/operations/#what-has-been-run-and-where')}>Operations</a> rather than left to be found.
+    </p>
+  </div>
+
+  <H s={o['the-bill']} />
+  <p>
+    One €10.49 ARM node and €6.63 of IP, volume and object storage run the application, its database, broker and cache,
+    metrics, logs, traces and backups. Prices are list prices with sources; footprints are measured, with the method.
+  </p>
+  <dl class="stats">
+    <div class="stat"><dt>This system, Hetzner</dt><dd>€17.12<small>per month, excluding VAT</small></dd></div>
+    <div class="stat"><dt>Same architecture, AWS</dt><dd>$167.62<small>EKS, one node, self-hosted stores</small></dd></div>
+    <div class="stat"><dt>Managed + Datadog, AWS</dt><dd>$650.74<small>RDS, ElastiCache, MSK, Datadog</small></dd></div>
+  </dl>
+  <figure class="chart">
+    <p class="chart-title">Where the managed build's {usd(managedTotal)} goes</p>
+    <p class="chart-sub">USD per month, us-east-1 on-demand list prices · docs/cost-analysis.md §7</p>
+    <div class="stack" role="img" aria-label={managed.map((m) => `${m.label} ${usd(m.value)}`).join(', ')}>
+      {managed.map((m) => <span class={m.cls} style={`flex: ${m.value} 1 0`} title={`${m.label}: ${usd(m.value)}`} />)}
+    </div>
+    <ul class="legend">
+      {
+        managed.map((m) => (
+          <li>
+            <i class={m.cls} />
+            {m.label} <b>{usd(m.value)}</b> ({Math.round((m.value / managedTotal) * 100)}%)
+          </li>
+        ))
+      }
+    </ul>
+  </figure>
+  <p>
+    Against €17.12, the same architecture on AWS costs roughly ten times as much and the managed build nearly forty —
+    7 to 12 and 29 to 47 times for any exchange rate between 0.8 and 1.3 dollars to the euro, so the conclusion does not
+    depend on it. The comparison does not buy the same availability, and it ignores labour; the
+    <a href={u('/cost/#9-what-this-comparison-does-not-say')}>cost analysis</a> says what it leaves out as plainly as
+    what it includes.
+  </p>
+
+  <H s={o['where-to-start']} />
+  <div class="cards">
+    <a class="card" href={u('/architecture/')}>
+      <span class="card-kicker">Reviewing the design</span>
+      <span class="card-title">Architecture and the close calls</span>
+      <span class="card-body">How the pieces fit and fail, then the decisions that cost something: Kafka on one broker, the outbox, readiness.</span>
+      <span class="card-foot">Architecture · ADR 0004 · ADR 0005 · ADR 0007</span>
+    </a>
+    <a class="card" href={u('/runbooks/incident-triage/')}>
+      <span class="card-kicker">Judging operability</span>
+      <span class="card-title">What on-call actually gets</span>
+      <span class="card-body">Triage from the first page to a diagnosis, three objectives with burn-rate alerts, and a runbook section per alert.</span>
+      <span class="card-foot">Incident triage · SLOs · Alert catalog</span>
+    </a>
+    <a class="card" href={u('/cost/')}>
+      <span class="card-kicker">Checking the numbers</span>
+      <span class="card-title">Footprint and the monthly bill</span>
+      <span class="card-body">Every size, memory and log-byte figure with its method, priced line by line against two AWS builds.</span>
+      <span class="card-foot">Cost analysis · Measurements</span>
+    </a>
+    <a class="card" href={u('/security/')}>
+      <span class="card-kicker">Auditing security</span>
+      <span class="card-title">Controls, and the known gaps</span>
+      <span class="card-body">The edge, the node, the cluster, the supply chain from pinned input to admission — and what is not protected.</span>
+      <span class="card-foot">Security · Delivery pipeline · Invariants</span>
+    </a>
+    <a class="card" href={u('/findings/')}>
+      <span class="card-kicker">Seeing what broke</span>
+      <span class="card-title">Defects found by running it</span>
+      <span class="card-body">A false zero-downtime claim, an outbox that stranded events, an admission policy that did not exist.</span>
+      <span class="card-foot">What running it found · Build record</span>
+    </a>
+    <a class="card" href={u('/quickstart/')}>
+      <span class="card-kicker">Running it</span>
+      <span class="card-title">One command, then the drills</span>
+      <span class="card-body">The whole stack with dashboards on a laptop, and the same drills CI runs every week.</span>
+      <span class="card-foot">Quickstart · Make targets</span>
+    </a>
+  </div>
+
+  <H s={o.stack} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>Technology</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>Services</td><td>Java 21, Spring Boot 3.5 on virtual threads, Gradle multi-project</td><td><a href={adr('0002')}>ADR 0002</a></td></tr>
+        <tr><td>Gateway</td><td>Traefik v3</td><td><a href={u('/architecture/')}>Architecture</a></td></tr>
+        <tr><td>System of record</td><td>PostgreSQL 16, Spring Data JPA, Flyway expand/contract</td><td><a href={u('/runbooks/zero-downtime-migration/')}>Schema changes</a></td></tr>
+        <tr><td>Cache and read model</td><td>Redis 7</td><td><a href={adr('0006')}>ADR 0006</a></td></tr>
+        <tr><td>Messaging</td><td>Apache Kafka, KRaft, one broker; transactional outbox with a polling relay</td><td><a href={adr('0004')}>ADR 0004</a> · <a href={adr('0005')}>0005</a></td></tr>
+        <tr><td>Backups</td><td>Continuous WAL archiving and nightly base backups to object storage</td><td><a href={adr('0009')}>ADR 0009</a></td></tr>
+        <tr><td>Container</td><td>Layered JAR, <code>jlink</code> runtime, distroless, non-root, read-only</td><td><a href={u('/measurements/#image')}>Measurements</a></td></tr>
+        <tr><td>Orchestration</td><td>k3s v1.33 on one ARM node, Kustomize base and overlays</td><td><a href={adr('0001')}>ADR 0001</a></td></tr>
+        <tr><td>Provisioning</td><td>Terraform (Hetzner Cloud, Cloudflare DNS), Ansible</td><td><a href={u('/platform/terraform/')}>Terraform</a> · <a href={u('/platform/ansible/')}>Ansible</a></td></tr>
+        <tr><td>Delivery</td><td>GitHub Actions builds, scans and signs; Flux v2 reconciles</td><td><a href={adr('0003')}>ADR 0003</a></td></tr>
+        <tr><td>Supply chain</td><td>SHA-pinned actions, cosign keyless, SPDX SBOM, SLSA provenance, policy-controller at admission</td><td><a href={adr('0008')}>ADR 0008</a></td></tr>
+        <tr><td>Secrets</td><td>SOPS and age in git, mounted as files, never environment variables</td><td><a href={u('/security/#secrets')}>Security</a></td></tr>
+        <tr><td>Observability</td><td>Prometheus 3.13, Alertmanager 0.33, Loki 3.7 with Alloy, Tempo 2.10, Grafana 13.1</td><td><a href={adr('0010')}>ADR 0010</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+</Page>

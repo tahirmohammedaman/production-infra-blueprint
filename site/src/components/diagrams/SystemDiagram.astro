@@ -1,0 +1,203 @@
+---
+// The request path and the asynchronous path, drawn by hand so the part the design turns on —
+// the outbox — is the part the eye lands on.
+---
+
+<figure class="diagram system-diagram">
+  <svg viewBox="0 0 960 468" width="960" role="img" aria-labelledby="sys-title sys-desc">
+    <title id="sys-title">The system: request path and asynchronous path</title>
+    <desc id="sys-desc">
+      A client reaches the api through the Traefik gateway. The api reads through Redis and writes an item and its
+      event to Postgres in one transaction. An outbox relay in every api replica claims committed events with FOR
+      UPDATE SKIP LOCKED and publishes them to Kafka. The worker consumes them at least once, applies each event once
+      to the read model in Redis, and routes records that exhaust their retries to a dead-letter topic. Postgres ships
+      WAL and nightly base backups to object storage.
+    </desc>
+    <defs>
+      <marker id="sys-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 1 10 5 0 9z" class="fill-ink"></path>
+      </marker>
+      <marker id="sys-ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 1 10 5 0 9z" class="fill-accent"></path>
+      </marker>
+    </defs>
+
+    <!-- request path -->
+    <g class="box">
+      <rect x="16" y="54" width="104" height="50"></rect>
+      <text x="68" y="84" class="t-main">client</text>
+    </g>
+    <g class="box">
+      <rect x="176" y="54" width="128" height="50"></rect>
+      <text x="240" y="77" class="t-main">Traefik</text>
+      <text x="240" y="93" class="t-sub">gateway · :443</text>
+    </g>
+    <g class="box strong">
+      <rect x="360" y="46" width="150" height="66"></rect>
+      <text x="435" y="73" class="t-main t-lg">api</text>
+      <text x="435" y="89" class="t-sub">:8080 · mgmt :9090</text>
+      <text x="435" y="102" class="t-sub">virtual threads</text>
+    </g>
+    <g class="box">
+      <rect x="776" y="46" width="150" height="66"></rect>
+      <text x="851" y="73" class="t-main">Redis</text>
+      <text x="851" y="89" class="t-sub">cache + read model</text>
+      <text x="851" y="102" class="t-sub">noeviction</text>
+    </g>
+
+    <line x1="120" y1="79" x2="170" y2="79" class="ln" marker-end="url(#sys-ah)"></line>
+    <text x="145" y="70" class="t-edge">HTTPS</text>
+    <line x1="304" y1="79" x2="354" y2="79" class="ln" marker-end="url(#sys-ah)"></line>
+    <text x="329" y="70" class="t-edge">/api</text>
+
+    <line x1="510" y1="66" x2="770" y2="66" class="ln" marker-end="url(#sys-ah)"></line>
+    <text x="640" y="57" class="t-edge">cache-aside read</text>
+    <line x1="510" y1="94" x2="770" y2="94" class="ln dash" marker-end="url(#sys-ah)"></line>
+    <text x="640" y="110" class="t-edge">reconcile from Postgres, only when quiet</text>
+
+    <!-- system of record -->
+    <g class="box">
+      <rect x="360" y="178" width="150" height="70"></rect>
+      <text x="435" y="203" class="t-main">PostgreSQL 16</text>
+      <text x="435" y="219" class="t-sub">items</text>
+      <text x="435" y="235" class="t-sub t-accent">outbox_events</text>
+    </g>
+    <line x1="435" y1="112" x2="435" y2="172" class="ln heavy" marker-end="url(#sys-ah)"></line>
+    <text x="445" y="148" class="t-edge t-start">item + event, one transaction</text>
+
+    <g class="box">
+      <rect x="626" y="178" width="150" height="70" class="dash"></rect>
+      <text x="701" y="206" class="t-main">object storage</text>
+      <text x="701" y="222" class="t-sub">WAL archive</text>
+      <text x="701" y="235" class="t-sub">nightly base backup</text>
+    </g>
+    <line x1="510" y1="213" x2="620" y2="213" class="ln dash" marker-end="url(#sys-ah)"></line>
+    <text x="566" y="204" class="t-edge">≤ 5 min</text>
+
+    <!-- asynchronous path -->
+    <g class="box accent">
+      <rect x="132" y="302" width="152" height="52" class="dash"></rect>
+      <text x="208" y="325" class="t-main">outbox relay</text>
+      <text x="208" y="341" class="t-sub">in every api replica</text>
+    </g>
+    <path d="M360 226H208v70" class="ln accent-ln" marker-end="url(#sys-ah-a)"></path>
+    <text x="352" y="286" class="t-edge t-accent t-end">claim · FOR UPDATE SKIP LOCKED</text>
+
+    <g class="box accent">
+      <rect x="384" y="302" width="126" height="52"></rect>
+      <text x="447" y="325" class="t-main">Kafka</text>
+      <text x="447" y="341" class="t-sub">item-events · KRaft</text>
+    </g>
+    <line x1="284" y1="328" x2="378" y2="328" class="ln accent-ln" marker-end="url(#sys-ah-a)"></line>
+    <text x="331" y="318" class="t-edge t-accent">acks=all</text>
+
+    <g class="box accent strong">
+      <rect x="610" y="296" width="150" height="64"></rect>
+      <text x="685" y="322" class="t-main t-lg">worker</text>
+      <text x="685" y="338" class="t-sub">idempotent consumer</text>
+      <text x="685" y="350" class="t-sub">3 partitions · 3 threads</text>
+    </g>
+    <line x1="510" y1="328" x2="604" y2="328" class="ln accent-ln" marker-end="url(#sys-ah-a)"></line>
+    <text x="557" y="318" class="t-edge t-accent">at-least-once</text>
+
+    <path d="M760 328H851V118" class="ln accent-ln" marker-end="url(#sys-ah-a)"></path>
+    <text x="841" y="262" class="t-edge t-accent t-end">applied once per event id</text>
+
+    <g class="box">
+      <rect x="610" y="404" width="150" height="34" class="dash"></rect>
+      <text x="685" y="425" class="t-sub t-mid">item-events.DLT</text>
+    </g>
+    <line x1="685" y1="360" x2="685" y2="398" class="ln dash" marker-end="url(#sys-ah)"></line>
+    <text x="695" y="384" class="t-edge t-start">retries exhausted</text>
+
+    <!-- key -->
+    <g class="key" transform="translate(16 408)">
+      <line x1="0" y1="6" x2="34" y2="6" class="ln"></line>
+      <text x="44" y="10" class="t-edge t-start">request path</text>
+      <line x1="0" y1="26" x2="34" y2="26" class="ln accent-ln"></line>
+      <text x="44" y="30" class="t-edge t-start">asynchronous path</text>
+      <line x1="0" y1="46" x2="34" y2="46" class="ln dash"></line>
+      <text x="44" y="50" class="t-edge t-start">background work</text>
+    </g>
+  </svg>
+  <figcaption>
+    <b>Fig. 1</b> — Blue is the asynchronous path, the part the design turns on. A request finishes when the transaction
+    commits; nothing below Postgres is on its path, which is why a broker outage costs freshness and nothing else.
+  </figcaption>
+</figure>
+
+<style>
+  .system-diagram svg {
+    min-width: 720px;
+    color: var(--ink-2);
+  }
+  .box rect {
+    fill: var(--surface);
+    stroke: var(--ink-3);
+    stroke-width: 1.2;
+  }
+  .box.strong rect {
+    stroke: var(--ink);
+    stroke-width: 2;
+  }
+  .box.accent rect {
+    stroke: var(--accent);
+  }
+  .box.accent.strong rect {
+    stroke-width: 2;
+  }
+  .dash {
+    stroke-dasharray: 5 4;
+  }
+  text {
+    font-family: var(--f-mono);
+    text-anchor: middle;
+  }
+  .t-main {
+    font-size: 13px;
+    fill: var(--ink);
+  }
+  .t-lg {
+    font-size: 14.5px;
+    font-weight: 600;
+  }
+  .t-sub {
+    font-size: 10px;
+    fill: var(--ink-3);
+  }
+  .t-mid {
+    font-size: 11px;
+  }
+  .t-edge {
+    font-size: 10px;
+    fill: var(--ink-3);
+  }
+  .t-accent {
+    fill: var(--accent);
+  }
+  .t-start {
+    text-anchor: start;
+  }
+  .t-end {
+    text-anchor: end;
+  }
+  .ln {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1.2;
+  }
+  .ln.heavy {
+    stroke: var(--ink-2);
+    stroke-width: 1.8;
+  }
+  .accent-ln {
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+  .fill-ink {
+    fill: var(--ink-3);
+  }
+  .fill-accent {
+    fill: var(--accent);
+  }
+</style>

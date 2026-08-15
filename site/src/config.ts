@@ -31,6 +31,14 @@ export interface NavGroup {
 
 export const nav: NavGroup[] = [
   {
+    id: 'overview',
+    title: 'Overview',
+    items: [
+      { title: 'Introduction', route: '/' },
+      { title: 'Quickstart', route: '/quickstart/' },
+    ],
+  },
+  {
     id: 'architecture',
     title: 'Architecture',
     items: [
@@ -42,6 +50,7 @@ export const nav: NavGroup[] = [
     id: 'delivery',
     title: 'Delivery & security',
     items: [
+      { title: 'Delivery pipeline', route: '/delivery/' },
       { title: 'Security', route: '/security/', source: 'docs/security.md' },
     ],
   },
@@ -69,6 +78,7 @@ export const nav: NavGroup[] = [
     items: [
       { title: 'Operations', route: '/operations/', source: 'docs/operations.md' },
       { title: 'Cost analysis', route: '/cost/', source: 'docs/cost-analysis.md' },
+      { title: 'Measurements', route: '/measurements/' },
     ],
   },
 ];

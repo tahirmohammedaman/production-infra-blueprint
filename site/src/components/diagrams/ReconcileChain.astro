@@ -1,0 +1,153 @@
+---
+// Flux's Kustomizations in the order they become healthy, from clusters/prod/. Drawn as a list,
+// not a picture, because each stage's reason matters more than its position.
+
+import { site } from '../../config';
+
+const stages = [
+  {
+    name: 'infrastructure-controllers',
+    holds: 'Traefik, cert-manager, policy-controller',
+    why: 'HelmReleases whose CRDs everything after them needs.',
+  },
+  {
+    name: 'infrastructure-configs',
+    holds: 'ACME ClusterIssuers, the image signature policy',
+    why: 'Cannot be applied until their controllers’ CRDs exist.',
+  },
+  {
+    name: 'apps-config',
+    holds: 'Namespace, SOPS-decrypted Secrets, NetworkPolicies',
+    why: 'Separate, so a failed deploy cannot prune the credentials from under the database, and no pod runs before the policy that restricts it.',
+  },
+  {
+    name: 'apps-data',
+    holds: 'Postgres, Redis, Kafka and its topics',
+    why: 'Healthy before the migration needs them. The one stage with prune: false — a path renamed by mistake must not become a deleted database.',
+    flag: 'prune: false',
+  },
+  {
+    name: 'apps-migrations',
+    holds: 'The Flyway Job, and nothing else',
+    why: 'Alone so wait: true can block on it. The rollout cannot start until the schema change has finished.',
+    flag: 'wait: true',
+  },
+  {
+    name: 'apps',
+    holds: 'api, worker — the rollout',
+    why: 'maxUnavailable 0, maxSurge 1, drain before SIGTERM.',
+  },
+];
+---
+
+<figure class="chain-figure">
+  <ol class="chain">
+    {
+      stages.map((s, i) => (
+        <li class="chain-stage">
+          <span class="chain-n">{String(i + 1).padStart(2, '0')}</span>
+          <div>
+            <div class="chain-head">
+              <code>{s.name}</code>
+              {s.flag && <span class="pill pill-warn">{s.flag}</span>}
+            </div>
+            <p class="chain-holds">{s.holds}</p>
+            <p class="chain-why">{s.why}</p>
+          </div>
+        </li>
+      ))
+    }
+  </ol>
+  <p class="chain-aside">
+    <code>observability</code> — Prometheus, Alertmanager, Loki, Tempo, Alloy, Grafana. Nothing depends on it: an
+    application deploy never waits for Grafana, and a broken monitoring upgrade can never block a fix.
+  </p>
+  <figcaption>
+    <b>Fig. 3</b> — Each stage waits for the previous one to be healthy, not merely applied.
+    <a href={`${site.repo}/tree/${site.branch}/clusters/prod`} class="ext" rel="noopener">clusters/prod</a>
+  </figcaption>
+</figure>
+
+<style>
+  .chain-figure {
+    margin: 1.4rem 0 2rem;
+    max-width: none;
+  }
+  .chain {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .chain-stage {
+    position: relative;
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr);
+    gap: 0.9rem;
+    padding: 0.85rem 1.1rem 0.9rem 0.9rem;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .chain-stage:last-child {
+    border-bottom: 0;
+  }
+  .chain-stage::before {
+    content: '';
+    position: absolute;
+    left: calc(0.9rem + 1.5rem);
+    top: 2.6rem;
+    bottom: -0.9rem;
+    border-left: 1px dashed var(--accent);
+    opacity: 0.5;
+  }
+  .chain-stage:last-child::before {
+    display: none;
+  }
+  .chain-n {
+    display: grid;
+    place-items: center;
+    width: 3rem;
+    height: 1.9rem;
+    border: 1px solid var(--accent);
+    background: var(--accent-bg);
+    font-family: var(--f-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--accent);
+    position: relative;
+    z-index: 1;
+  }
+  .chain-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .chain-head code {
+    font-size: 0.9rem !important;
+    font-weight: 600;
+    color: var(--ink);
+    background: none !important;
+    border: 0 !important;
+    padding: 0 !important;
+  }
+  .chain-holds {
+    margin: 0.15rem 0 0 !important;
+    font-family: var(--f-display);
+    font-size: 0.98rem;
+    color: var(--ink);
+  }
+  .chain-why {
+    margin: 0.15rem 0 0 !important;
+    font-size: 0.9rem;
+    color: var(--ink-2);
+  }
+  .chain-aside {
+    margin: 0 !important;
+    padding: 0.75rem 1.1rem;
+    border: 1px dashed var(--rule);
+    border-top: 0;
+    font-size: 0.9rem;
+    color: var(--ink-2);
+  }
+</style>

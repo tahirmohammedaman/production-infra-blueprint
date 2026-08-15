@@ -1,0 +1,233 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import { outlines, headingsFor } from '../lib/outlines';
+import { withBase as u } from '../lib/paths';
+
+const o = outlines['/measurements/'];
+
+// All figures from docs/cost-analysis.md, docs/operations.md and docs/runbooks/db-restore.md.
+const MIB_PER_MB = 1_000_000 / 1_048_576;
+
+const image = [
+  { label: 'dependencies, /app/lib', value: 69, cls: 'c1', note: 'changes when a dependency does' },
+  { label: 'jlink runtime', value: 65, cls: 'c2', note: 'changes with the JDK or module list' },
+  { label: 'distroless base', value: 36, cls: 'c3', note: 'changes when the base is bumped' },
+  { label: 'application, /app/app.jar', value: 0.033, cls: 'c4', note: '33 KB — every code change' },
+];
+
+const app = [
+  { name: 'api', rss: 433, limit: 640, util: 68 },
+  { name: 'worker', rss: 311, limit: 448, util: 66 },
+  { name: 'kafka', rss: 326, limit: 1400, util: 22 },
+  { name: 'postgres', rss: 29, limit: 512, util: 5 },
+  { name: 'gateway', rss: 29, limit: 128, util: 22 },
+  { name: 'redis', rss: 7, limit: 128, util: 5 },
+];
+
+const obs = [
+  { name: 'grafana', rss: 178, limit: 256 },
+  { name: 'alloy', rss: 115, limit: 192 },
+  { name: 'tempo', rss: 110, limit: 256 },
+  { name: 'loki', rss: 86, limit: 256 },
+  { name: 'prometheus', rss: 77, limit: 384 },
+  { name: 'alertmanager', rss: 21, limit: 64 },
+].map((c) => ({ ...c, util: Math.round(((c.rss * MIB_PER_MB) / c.limit) * 100) }));
+
+// Requests against the node, in GiB. 8 GB of RAM is 7.45 GiB.
+const NODE_GIB = 8 * (1e9 / 2 ** 30);
+const requests = [
+  { label: 'application', value: 2.7, cls: 'c1' },
+  { label: 'observability', value: 0.7, cls: 'c2' },
+  { label: 'Traefik, cert-manager, policy-controller', value: 0.27, cls: 'c3' },
+];
+const requested = requests.reduce((s, r) => s + r.value, 0);
+---
+
+<Page
+  title="Measurements"
+  route="/measurements/"
+  headings={headingsFor('/measurements/')}
+  intro="Every footprint and result in one place, with where it was measured and how. The documents each figure comes from have the full method; this page is for reading them side by side."
+>
+  <H s={o.method} />
+  <p>
+    Two kinds of number appear in this repository and are kept apart. <strong>Footprints</strong> — image size, memory,
+    start-up time, series, log bytes, backup sizes, failed requests — were measured on this system, and the method is
+    given so each can be reproduced or disputed. <strong>Prices</strong> are published list prices with sources, in the
+    <a href={u('/cost/')}>cost analysis</a>. Kubernetes requests and limits cite the measurement they were derived from,
+    never a round number.
+  </p>
+
+  <H s={o.image} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Approach</th><th>Base image</th><th class="num">Size</th><th class="num">vs. naive</th></tr></thead>
+      <tbody>
+        <tr><td>Fat JAR on a JDK base</td><td class="mono">eclipse-temurin:21-jdk-noble</td><td class="num">523 MB</td><td class="num">—</td></tr>
+        <tr><td>Fat JAR on a JRE base</td><td class="mono">eclipse-temurin:21-jre-alpine</td><td class="num">279 MB</td><td class="num">−47%</td></tr>
+        <tr><td><strong>Layered JAR, jlink runtime — shipped</strong></td><td class="mono">distroless/java-base-debian12:nonroot</td><td class="num"><strong>170 MB</strong></td><td class="num"><strong>−67%</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <figure class="chart">
+    <p class="chart-title">Where the shipped image's 170 MB goes</p>
+    <p class="chart-sub">MB per layer, API image · the application layer is too small to see, which is the point</p>
+    <div class="stack" role="img" aria-label={image.map((l) => `${l.label} ${l.value} MB`).join(', ')}>
+      {image.map((l) => <span class={l.cls} style={`flex: ${l.value} 1 0`} title={`${l.label}: ${l.note}`} />)}
+    </div>
+    <ul class="legend">
+      {image.map((l) => <li><i class={l.cls} />{l.label} <b>{l.value < 1 ? '33 KB' : `${l.value} MB`}</b></li>)}
+    </ul>
+  </figure>
+  <p>
+    A typical deploy changes application code and nothing else, so it pushes and pulls <strong>33 KB</strong>, not 170 MB.
+    The worker image, from the same Dockerfile, is 164 MB; the API grew to 200 MB once the Redis, Kafka and JPA
+    dependencies arrived. The jlink runtime is 63 MB against the 345 MB JDK it was cut from, with a module list curated by
+    hand and certified by the smoke test, because jdeps cannot see reflection or driver discovery.
+  </p>
+
+  <H s={o.startup} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Spring context refresh</th><th class="num">Run 1</th><th class="num">Run 2</th><th class="num">Run 3</th><th class="num">Mean</th></tr></thead>
+      <tbody>
+        <tr><td>Without CDS</td><td class="num">4.78 s</td><td class="num">4.93 s</td><td class="num">4.99 s</td><td class="num"><strong>4.90 s</strong></td></tr>
+        <tr><td>With a CDS archive</td><td class="num">3.55 s</td><td class="num">3.69 s</td><td class="num">3.73 s</td><td class="num"><strong>3.66 s</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <strong>−25% start-up for +88 MB of image.</strong> CDS is a separate target, <code>make image-cds</code>, rather than
+    the default: for pods that live for days, a second per deploy does not pay for a 52% larger image. It flips when
+    start-up is on the critical path — aggressive autoscaling, or scale-to-zero.
+  </p>
+
+  <H s={o.memory} />
+  <figure class="chart">
+    <p class="chart-title">Application containers: resident memory against the limit</p>
+    <p class="chart-sub">podman stats after the smoke-test workload · the bar is utilisation of the limit</p>
+    <ul class="meters">
+      {
+        app.map((c) => (
+          <li class="meter">
+            <span class="meter-name">{c.name}</span>
+            <span class="meter-bar" title={`${c.name}: ${c.util}% of its limit`}><span style={`width: ${c.util}%`} /></span>
+            <span class="meter-value">{c.rss} MB / {c.limit} MiB · {c.util}%</span>
+          </li>
+        ))
+      }
+    </ul>
+  </figure>
+  <ul>
+    <li><strong>The API limit went from 512 to 640 MiB</strong> because adding the Redis and Kafka clients put the old limit at 81% — no headroom for a GC pause or a burst. The number said so.</li>
+    <li><strong>Kafka's limit is generous against its 22%</strong>, deliberately: its real consumer is the page cache holding recent segments, which never shows in RSS.</li>
+    <li><strong>No <code>-Xmx</code> anywhere.</strong> Heap is <code>MaxRAMPercentage=70</code> of the cgroup limit, so the limit is the one place memory is tuned; the rest is metaspace, thread stacks, code cache and direct buffers.</li>
+  </ul>
+  <figure class="chart">
+    <p class="chart-title">Observability stack: resident memory against the limit</p>
+    <p class="chart-sub">about 590 MB for all six — roughly one API replica</p>
+    <ul class="meters">
+      {
+        obs.map((c) => (
+          <li class="meter">
+            <span class="meter-name">{c.name}</span>
+            <span class="meter-bar" title={`${c.name}: ${c.util}% of its limit`}><span style={`width: ${c.util}%`} /></span>
+            <span class="meter-value">{c.rss} MB / {c.limit} MiB · {c.util}%</span>
+          </li>
+        ))
+      }
+    </ul>
+  </figure>
+
+  <H s={o.node} />
+  <figure class="chart">
+    <p class="chart-title">Memory requested on the CAX21</p>
+    <p class="chart-sub">GiB of requests against 8 GB of RAM · k3s and Flux's controllers are the unshaded remainder's first tenants</p>
+    <div class="stack" role="img" aria-label={`${requested.toFixed(1)} GiB requested of ${NODE_GIB.toFixed(2)} GiB`}>
+      {requests.map((r) => <span class={r.cls} style={`flex: ${r.value} 1 0`} title={`${r.label}: ${r.value} GiB`} />)}
+      <span class="track" style={`flex: ${NODE_GIB - requested} 1 0`} title="not requested" />
+    </div>
+    <ul class="legend">
+      {requests.map((r) => <li><i class={r.cls} />{r.label} <b>{r.value} Gi</b></li>)}
+      <li><i class="track" style="background: var(--chart-track)" />not requested <b>{(NODE_GIB - requested).toFixed(1)} Gi</b></li>
+    </ul>
+  </figure>
+  <p>
+    <strong>3.7 Gi requested</strong>, 4.7 Gi with the API at its HPA ceiling of four replicas. Limits add up to 6.1 Gi —
+    more than is comfortable, deliberately: they are ceilings a container is killed at, not reservations, and the thing
+    that would make them peak together is a load spike, which the HPA and the objectives exist to catch. The full table,
+    and the Postgres connection budget, are in <a href={u('/operations/#what-fits-on-the-node')}>Operations</a>.
+  </p>
+
+  <H s={o['observability-cost']} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Scrape target</th><th class="num">Samples per scrape</th><th class="num">Budget, sample_limit</th></tr></thead>
+      <tbody>
+        <tr><td>api</td><td class="num">412 <span style="color: var(--ink-3)">(was 1,025)</span></td><td class="num">1,500</td></tr>
+        <tr><td>worker</td><td class="num">543</td><td class="num">1,200</td></tr>
+        <tr><td>gateway</td><td class="num">344</td><td class="num">1,000</td></tr>
+        <tr><td>postgres exporter, in the cluster</td><td class="num">224 <span style="color: var(--ink-3)">(default 651)</span></td><td class="num">400</td></tr>
+        <tr><td>grafana, after dropping its own series</td><td class="num">8 of ~3,700</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Logs, per request, 9,051 requests of steady load</th><th class="num">Bytes</th><th class="num">Share</th></tr></thead>
+      <tbody>
+        <tr><td><strong>All services — 1.48 lines</strong></td><td class="num"><strong>1,101</strong></td><td class="num"></td></tr>
+        <tr><td>gateway access log</td><td class="num">809</td><td class="num">76%</td></tr>
+        <tr><td>api</td><td class="num">157</td><td class="num">15%</td></tr>
+        <tr><td>worker</td><td class="num">94</td><td class="num">9%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Loki's chunks compressed 4.4 to 1: thirty days at a million requests a day is about 7.5 GB, inside the 1 TB the object
+    storage price already includes. Before the span filter, 176 of 198 stored traces were scheduled tasks and probes.
+  </p>
+
+  <H s={o.drills} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Run</th><th>Where</th><th class="num">Requests</th><th class="num">Failed</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>make load</code>, two minutes</td><td>Compose</td><td class="num">7,251</td><td class="num">0</td><td>p99 37 ms through the gateway</td></tr>
+        <tr><td>Steady k6 profile, 50 req/s, three minutes</td><td>Compose</td><td class="num">9,051</td><td class="num">0</td><td>p99 38 ms; the log measurement above</td></tr>
+        <tr><td>Rollouts, <code>preStop</code> sleep</td><td>kind</td><td class="num">11,972</td><td class="num">4</td><td>all POSTs, keep-alive closes crossing requests</td></tr>
+        <tr><td>Rollouts, drain before SIGTERM</td><td>kind</td><td class="num">11,970</td><td class="num">0</td><td>identical load: 40 req/s, half writes, three rollouts</td></tr>
+        <tr><td><code>make drill</code>, weekly</td><td>kind, CI</td><td class="num">6,001</td><td class="num">0</td><td>every API pod replaced under load</td></tr>
+        <tr><td>Kafka stopped for 150 s under load</td><td>Compose</td><td class="num">15 writes</td><td class="num">0</td><td>no attempts spent; drained 12 s after restart</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Point-in-time restore</th><th class="num">30,000 rows, 27 MB</th><th class="num">300,000 rows, 205 MB</th></tr></thead>
+      <tbody>
+        <tr><td>Base backup, taken and uploaded</td><td class="num">2.0 s</td><td class="num">4.0 s</td></tr>
+        <tr><td>Base backup in object storage</td><td class="num">5.3 MB</td><td class="num">15.2 MB</td></tr>
+        <tr><td>WAL archived by the drill</td><td class="num">11 MB</td><td class="num">80 MB</td></tr>
+        <tr><td>Fetch and verify the base backup</td><td class="num">1.6 s</td><td class="num">2.6 s</td></tr>
+        <tr><td>Until promoted and writable</td><td class="num">5.6 s</td><td class="num">10.6 s</td></tr>
+        <tr><td>A timed-out WAL segment, stored</td><td class="num">16 KB of 16 MB</td><td class="num">16 KB of 16 MB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Restore time grows with the WAL to replay far more than with the base backup — which is the argument for a daily base
+    backup rather than a weekly one. The runbook itself, run command by command against the production manifests in kind,
+    took 12 seconds from stop to promoted for a 27 MB database (<a href={u('/runbooks/db-restore/#the-numbers')}>Restore the database</a>).
+  </p>
+
+  <H s={o['still-to-measure']} />
+  <ul>
+    <li><strong>An invoice.</strong> Every price is a list price; the first month's bill replaces them.</li>
+    <li>Loki and the WAL archive against Hetzner's own object storage endpoint, including request latency from the node.</li>
+    <li>Kafka's page-cache working set under sustained produce load — whether 1.4 GB is generous or merely adequate.</li>
+    <li>Registry storage and egress under the real deploy cadence, where the 33 KB layer should show.</li>
+    <li>Backup size and restore time on data that compresses like real data rather than repeated strings.</li>
+  </ul>
+</Page>

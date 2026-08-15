@@ -1,0 +1,149 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import Code from '../components/Code.astro';
+import DeliveryDiagram from '../components/diagrams/DeliveryDiagram.astro';
+import ReconcileChain from '../components/diagrams/ReconcileChain.astro';
+import { site } from '../config';
+import { outlines, headingsFor } from '../lib/outlines';
+import { withBase as u, githubUrl } from '../lib/paths';
+
+const o = outlines['/delivery/'];
+
+const workflows = [
+  {
+    file: '.github/workflows/ci.yml',
+    runs: 'pull request, main',
+    gates: 'Formatting, workflow and shell lint, tests against real Postgres, Redis and Kafka, per-service coverage thresholds, Terraform and Ansible validation, every manifest against the Kubernetes schemas, the alert unit tests.',
+  },
+  {
+    file: '.github/workflows/security.yml',
+    runs: 'pull request, main, Monday 05:00 UTC',
+    gates: 'Secrets in the full history, semgrep with community rules and five of this repository’s own, hadolint, trivy config, checkov on the rendered manifests — and a weekly re-scan of the images already published.',
+  },
+  {
+    file: '.github/workflows/build.yml',
+    runs: 'pull request, main, tags',
+    gates: 'Pull request: one architecture built, scanned and measured against a size budget, reported on the PR. Main: amd64 and arm64 built on native runners, joined, scanned, then signed and attested.',
+  },
+  {
+    file: '.github/workflows/drills.yml',
+    runs: 'on relevant change, main, Tuesday 04:00 UTC',
+    gates: 'A point-in-time restore that must lose no row and keep none it should not, and a rollout of every API pod under load in a real cluster that must fail no request.',
+  },
+];
+---
+
+<Page
+  title="Delivery pipeline"
+  route="/delivery/"
+  headings={headingsFor('/delivery/')}
+  intro="CI never touches the cluster. Its last act is publishing a signed image; Flux, running inside the cluster, pulls the change from git and reconciles it in stages that each wait for the last to be healthy."
+>
+  <H s={o['from-commit-to-cluster']} />
+  <p>
+    The conventional answer to “how does a merge become a deploy” is a final CI step with a kubeconfig in a repository
+    secret. That makes CI — which runs third-party actions and every transitive build dependency — the most privileged
+    thing that can touch production. Here the cluster pulls instead, and the admission webhook refuses any image of ours
+    that this repository’s build workflow did not sign (<a href={u('/decisions/0003-gitops-pull-with-flux/')}>ADR 0003</a>,
+    <a href={u('/decisions/0008-supply-chain-pinned-signed-and-attested/')}>ADR 0008</a>).
+  </p>
+  <DeliveryDiagram />
+
+  <H s={o.workflows} />
+  <p>
+    Each workflow ends in a single job named after the workflow that fails if any upstream job did. Branch protection
+    requires that one check, so adding a job never silently makes it optional.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Workflow</th><th>Runs on</th><th>What it gates</th></tr></thead>
+      <tbody>
+        {
+          workflows.map((w) => (
+            <tr>
+              <td class="mono"><a href={githubUrl(w.file)} rel="noopener">{w.file.split('/').pop()}</a></td>
+              <td>{w.runs}</td>
+              <td>{w.gates}</td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Every gate is an exit code. No scanner uploads SARIF into a dashboard: a finding that lands in a security tab and
+    merges anyway is reporting, not a control.
+  </p>
+
+  <H s={o['reconciliation-order']} />
+  <p>
+    Ordering is data, not a deploy script. Two Flux Kustomizations must never own the same object, so each stage owns a
+    disjoint set and expresses its place with <code>dependsOn</code>, <code>wait: true</code> and health checks. The
+    split is what makes an expand/contract schema change safe rather than optimistic: the migration Job runs to
+    completion before a single new pod starts.
+  </p>
+  <ReconcileChain />
+  <p>
+    Image tags are rewritten by Flux’s image automation and committed to <code>main</code>, so
+    <code>git log deploy/k8s/overlays/prod</code> is the deploy history and a rollback is a revert
+    (<a href={u('/runbooks/rollback/')}>Roll back a bad deploy</a>).
+  </p>
+
+  <H s={o.properties} />
+  <ul>
+    <li>
+      <strong>A change to one service does not rebuild the other.</strong> A path filter composes the test matrix;
+      <code>platform</code> is shared, so touching it fans back out to both, and a worker-only change never starts the
+      API’s Testcontainers stack.
+    </li>
+    <li>
+      <strong>Nothing is signed until it passes, and nothing unsigned runs.</strong> The image is pushed before it is
+      scanned, because a multi-arch manifest cannot be assembled otherwise. The gate is the signature: an image that fails
+      the scan is never signed, and admission requires one made by this repository’s workflow on <code>main</code> or a
+      release tag.
+    </li>
+    <li>
+      <strong>arm64 is built natively.</strong> Under QEMU the same image takes over thirty minutes, because Gradle and
+      jlink are CPU-bound; on a native runner it is the difference between a pipeline that runs on every push and one that
+      gets disabled.
+    </li>
+    <li>
+      <strong>The drills run on a schedule, not only on change.</strong> Base images, the object store’s API and the kind
+      node image all move without a commit here, and none of them needs one to break a drill.
+    </li>
+    <li>
+      <strong>Every input is pinned, and the pins move.</strong> Actions by 40-character SHA with a version comment,
+      enforced by a script in CI and as a pre-commit hook; Renovate proposes upgrades, because a pin nobody moves becomes a
+      known vulnerability.
+    </li>
+  </ul>
+
+  <H s={o.verify} />
+  <Code code={`make verify-pins                                          # every action pinned to a commit SHA
+make verify-image IMAGE=ghcr.io/tahirmohammedaman/blueprint-api:latest
+make flux-status                                          # what the cluster thinks it is running`} />
+  <p>
+    <code>scripts/verify-image.sh</code> checks the signature, the SBOM attestation and the build provenance against
+    this repository’s workflow identity specifically. <code>cosign verify</code> without
+    <code>--certificate-identity</code> passes for anything signed by any GitHub Actions workflow anywhere, which reads
+    like a control and is not one; the cluster’s admission policy asserts the same identity string.
+  </p>
+
+  <H s={o['what-ci-never-holds']} />
+  <p>
+    No workflow holds a kubeconfig, a cloud token, or the age key that decrypts the repository’s secrets. Workflows
+    declare <code>contents: read</code> and the few jobs that write widen it for themselves; registry pushes use the job’s
+    own token and signing uses its OIDC identity. A compromised CI run can publish an image. It cannot deploy one this
+    workflow did not sign, and it cannot touch anything else.
+  </p>
+  <p>
+    The cost is stated in ADR 0003: a merge takes up to fifteen minutes to arrive, and a failed reconciliation is quieter
+    than a failed pipeline — a condition on a resource, not a red build — which is why <code>make flux-status</code> is
+    step two of <a href={u('/runbooks/incident-triage/')}>incident triage</a>. Infrastructure changes are applied by a
+    person from a workstation, after reading the plan (<a href={u('/platform/terraform/')}>Terraform</a>).
+  </p>
+  <p>
+    <a href={`${site.repo}/tree/${site.branch}/.github/workflows`} class="ext" rel="noopener">The workflows, on GitHub</a>
+  </p>
+</Page>

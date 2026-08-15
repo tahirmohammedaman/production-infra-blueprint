@@ -1,0 +1,13 @@
+---
+import { highlightCode } from '../lib/markdown';
+
+interface Props {
+  code: string;
+  lang?: string;
+}
+
+const { code, lang = 'bash' } = Astro.props;
+const html = await highlightCode(code, lang);
+---
+
+<Fragment set:html={html} />

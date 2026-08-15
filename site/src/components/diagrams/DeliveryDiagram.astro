@@ -1,0 +1,183 @@
+---
+// From a merged commit to a running pod. The dashed line across the middle is the point of the
+// drawing: nothing above it can reach anything below it.
+---
+
+<figure class="diagram delivery-diagram">
+  <svg viewBox="0 0 960 344" width="960" role="img" aria-labelledby="dlv-title dlv-desc">
+    <title id="dlv-title">How a change reaches the cluster</title>
+    <desc id="dlv-desc">
+      A push runs the required checks and build.yml, which builds amd64 and arm64 natively, pushes both by digest to
+      GHCR, scans the joined manifest and only then signs it and attaches an SBOM and provenance. Below a boundary CI
+      never crosses, Flux image automation notices the new tag, commits it to git, and Flux reconciles the cluster in
+      health-gated stages. The admission webhook admits the image only if build.yml in this repository signed it.
+    </desc>
+    <defs>
+      <marker id="dlv-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 1 10 5 0 9z" class="fill-ink"></path>
+      </marker>
+      <marker id="dlv-ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 1 10 5 0 9z" class="fill-accent"></path>
+      </marker>
+    </defs>
+
+    <text x="16" y="24" class="t-zone">GitHub Actions — publishes, then stops</text>
+
+    <g class="box">
+      <rect x="16" y="44" width="110" height="56"></rect>
+      <text x="71" y="70" class="t-main">git push</text>
+      <text x="71" y="86" class="t-sub">merge to main</text>
+    </g>
+    <g class="box strong">
+      <rect x="176" y="44" width="160" height="56"></rect>
+      <text x="256" y="70" class="t-main">build.yml</text>
+      <text x="256" y="86" class="t-sub">amd64 + arm64, native</text>
+    </g>
+    <g class="box">
+      <rect x="386" y="44" width="130" height="56"></rect>
+      <text x="451" y="70" class="t-main">GHCR</text>
+      <text x="451" y="86" class="t-sub">pushed by digest</text>
+    </g>
+    <g class="box">
+      <rect x="566" y="44" width="140" height="56"></rect>
+      <text x="636" y="70" class="t-main">trivy</text>
+      <text x="636" y="86" class="t-sub">the joined manifest</text>
+    </g>
+    <g class="box accent strong">
+      <rect x="756" y="44" width="188" height="56"></rect>
+      <text x="850" y="70" class="t-main">cosign sign</text>
+      <text x="850" y="86" class="t-sub">SBOM · SLSA provenance</text>
+    </g>
+
+    <line x1="126" y1="72" x2="170" y2="72" class="ln" marker-end="url(#dlv-ah)"></line>
+    <line x1="336" y1="72" x2="380" y2="72" class="ln" marker-end="url(#dlv-ah)"></line>
+    <line x1="516" y1="72" x2="560" y2="72" class="ln" marker-end="url(#dlv-ah)"></line>
+    <line x1="706" y1="72" x2="750" y2="72" class="ln accent-ln" marker-end="url(#dlv-ah-a)"></line>
+    <text x="728" y="62" class="t-edge t-accent">pass</text>
+
+    <g class="box">
+      <rect x="16" y="128" width="320" height="34" class="dash"></rect>
+      <text x="176" y="149" class="t-sub t-mid">ci · security · drills — required before merge</text>
+    </g>
+    <path d="M71 100v22" class="ln" marker-end="url(#dlv-ah)"></path>
+
+    <!-- the boundary -->
+    <line x1="16" y1="196" x2="944" y2="196" class="boundary"></line>
+    <text x="944" y="188" class="t-zone t-end">no kubeconfig · no cloud credential · no age key</text>
+
+    <text x="16" y="336" class="t-zone">The cluster — pulls</text>
+
+    <g class="box">
+      <rect x="16" y="244" width="180" height="60"></rect>
+      <text x="106" y="270" class="t-main">image automation</text>
+      <text x="106" y="286" class="t-sub">polls GHCR · 5 min</text>
+    </g>
+    <g class="box">
+      <rect x="246" y="244" width="140" height="60"></rect>
+      <text x="316" y="270" class="t-main">main</text>
+      <text x="316" y="286" class="t-sub">tag committed</text>
+    </g>
+    <g class="box strong">
+      <rect x="436" y="244" width="190" height="60"></rect>
+      <text x="531" y="270" class="t-main">Flux reconciles</text>
+      <text x="531" y="286" class="t-sub">six stages, health-gated</text>
+    </g>
+    <g class="box accent">
+      <rect x="676" y="244" width="160" height="60"></rect>
+      <text x="756" y="270" class="t-main">policy-controller</text>
+      <text x="756" y="286" class="t-sub">signed by build.yml?</text>
+    </g>
+    <g class="box">
+      <rect x="874" y="244" width="70" height="60"></rect>
+      <text x="909" y="279" class="t-main">pods</text>
+    </g>
+
+    <path d="M451 100V224H106v14" class="ln dash" marker-end="url(#dlv-ah)"></path>
+    <text x="459" y="150" class="t-edge t-start">new signed tag</text>
+    <line x1="196" y1="274" x2="240" y2="274" class="ln" marker-end="url(#dlv-ah)"></line>
+    <line x1="386" y1="274" x2="430" y2="274" class="ln" marker-end="url(#dlv-ah)"></line>
+    <line x1="626" y1="274" x2="670" y2="274" class="ln" marker-end="url(#dlv-ah)"></line>
+    <line x1="836" y1="274" x2="868" y2="274" class="ln accent-ln" marker-end="url(#dlv-ah-a)"></line>
+    <text x="756" y="326" class="t-edge">unsigned, or another workflow's: refused</text>
+  </svg>
+  <figcaption>
+    <b>Fig. 2</b> — An image that fails the scan is never signed, and an unsigned image is inert: admission requires a
+    signature made by this repository's <code>build.yml</code>, on <code>main</code> or a release tag. It fails closed.
+  </figcaption>
+</figure>
+
+<style>
+  .delivery-diagram svg {
+    min-width: 740px;
+  }
+  .box rect {
+    fill: var(--surface);
+    stroke: var(--ink-3);
+    stroke-width: 1.2;
+  }
+  .box.strong rect {
+    stroke: var(--ink);
+    stroke-width: 2;
+  }
+  .box.accent rect {
+    stroke: var(--accent);
+  }
+  .dash {
+    stroke-dasharray: 5 4;
+  }
+  text {
+    font-family: var(--f-mono);
+    text-anchor: middle;
+  }
+  .t-main {
+    font-size: 13px;
+    fill: var(--ink);
+  }
+  .t-sub {
+    font-size: 10px;
+    fill: var(--ink-3);
+  }
+  .t-mid {
+    font-size: 10.5px;
+  }
+  .t-edge {
+    font-size: 10px;
+    fill: var(--ink-3);
+  }
+  .t-zone {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    text-anchor: start;
+    fill: var(--accent);
+  }
+  .t-accent {
+    fill: var(--accent);
+  }
+  .t-end {
+    text-anchor: end;
+  }
+  .ln {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1.2;
+  }
+  .ln.dash {
+    stroke-dasharray: 5 4;
+  }
+  .accent-ln {
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+  .boundary {
+    stroke: var(--warn);
+    stroke-width: 1.4;
+    stroke-dasharray: 10 6;
+  }
+  .fill-ink {
+    fill: var(--ink-3);
+  }
+  .fill-accent {
+    fill: var(--accent);
+  }
+</style>

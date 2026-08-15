@@ -1,0 +1,127 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import Code from '../components/Code.astro';
+import { outlines, headingsFor } from '../lib/outlines';
+import { withBase as u } from '../lib/paths';
+
+const o = outlines['/quickstart/'];
+
+const endpoints = [
+  ['API, through the gateway', 'http://localhost:8080/api/v1/items'],
+  ['Inventory summary', 'http://localhost:8080/api/v1/inventory/summary'],
+  ['OpenAPI UI', 'http://localhost:8080/swagger-ui.html'],
+  ['Gateway dashboard', 'http://localhost:8081/dashboard/'],
+  ['API health and metrics', 'http://localhost:9090/actuator/health'],
+  ['Worker health and metrics', 'http://localhost:9091/actuator/health'],
+  ['Grafana — dashboards, logs, traces; read-only without a login', 'http://localhost:3000'],
+  ['Prometheus', 'http://localhost:9095'],
+  ['Alertmanager', 'http://localhost:9093'],
+  ['Loki and Tempo APIs', 'http://localhost:3100 · http://localhost:3200'],
+];
+
+const drills = [
+  ['make obs-validate', 'Every observability config through its own binary, the alert unit tests and the routing tree — exactly the CI job.'],
+  ['make load', 'Steady load through the gateway, gated on the objectives. RATE=60 DURATION=5m by default.'],
+  ['make drill', 'Roll every API pod under load in a local kind cluster; fails on a single failed request.'],
+  ['make restore-drill', 'Back up Postgres, destroy it, restore to a point in time; fails on one wrong row. ROWS=20000.'],
+  ['make alerts', 'What is firing right now, from Alertmanager. Locally, alerts fire and route to nobody.'],
+  ['make k8s-validate', 'Render every kustomization and check it against the Kubernetes 1.33 schemas.'],
+];
+
+const stores = [
+  ['make psql', 'A psql shell against the local database.'],
+  ['make redis-cli', 'redis-cli against the cache and read model.'],
+  ['make lag', 'Consumer group lag for the worker — its real SLI.'],
+  ['make topics', 'Kafka topics and their partition counts.'],
+  ['make dlq', 'Anything sitting in the dead-letter topic.'],
+  ['make logs-<service>', 'Follow one service: api, worker, gateway, kafka, alloy…'],
+  ['make ps', 'The state of every container in the stack.'],
+];
+---
+
+<Page
+  title="Quickstart"
+  route="/quickstart/"
+  headings={headingsFor('/quickstart/')}
+  intro="The whole system on a laptop — services, stores, gateway and the observability stack — from one command that does not succeed until a request has crossed all of it."
+>
+  <H s={o.requirements} />
+  <ul>
+    <li><strong>Docker, or rootless podman</strong>, with a compose implementation — <code>docker compose</code> or <code>podman-compose</code>. Both are first-class; <code>make doctor</code> reports which runtime, compose and socket it found.</li>
+    <li><strong>About 2 GB of free memory.</strong> Six application containers measure about 1.14 GB; the observability stack adds about 590 MB.</li>
+    <li><strong>Free ports</strong> 8080, 8081, 9090, 9091, 3000, 9093 and 9095. Everything binds to 127.0.0.1.</li>
+    <li><strong>A few minutes for the first build.</strong> Both services compile inside the image build; later builds reuse the layer cache.</li>
+  </ul>
+  <p>
+    On an SELinux-enforcing host with rootless podman, bind-mounted secrets need relabelling and the gateway needs to
+    read the podman socket. An overlay that does both is applied automatically; nothing in the base compose file is
+    loosened to make it work.
+  </p>
+
+  <H s={o['bring-it-up']} />
+  <Code code={`make bootstrap     # build, start everything, and prove it works
+make smoke         # re-run the end-to-end assertions against the running stack
+make down          # stop and delete volumes`} />
+  <p>
+    <code>make bootstrap</code> generates the local secret files, builds both hardened images, starts every container
+    in health order and runs the smoke test. Dependencies are expressed as health conditions, never sleeps: Postgres
+    and Redis must answer before the API starts, and Kafka's health check asks the broker to serve a real request,
+    because a port check passes while the broker is still recovering.
+  </p>
+
+  <H s={o['what-bootstrap-proves']} />
+  <p>Bootstrap does not return successfully until a request has travelled the whole system:</p>
+  <ol>
+    <li>through the gateway, to a ready API replica;</li>
+    <li>into Postgres, with the item and its outbox event in one transaction;</li>
+    <li>out through the relay to Kafka;</li>
+    <li>through the worker, applied once, into the Redis read model;</li>
+    <li>and back out of the API's inventory summary endpoint.</li>
+  </ol>
+  <p>
+    <code>scripts/smoke-test.sh</code> asserts 27 things along the way, including liveness and readiness, the metrics the
+    alerts depend on, and that the management endpoints are not reachable through the gateway.
+  </p>
+
+  <H s={o.endpoints} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>What</th><th>Where</th></tr></thead>
+      <tbody>
+        {endpoints.map(([what, where]) => <tr><td>{what}</td><td class="mono">{where}</td></tr>)}
+      </tbody>
+    </table>
+  </div>
+
+  <H s={o['secrets-locally']} />
+  <p>
+    Bootstrap writes development-only secret files to <code>deploy/compose/secrets/</code>, which is gitignored. They are
+    files rather than environment variables because the services read configuration from
+    <code>configtree:/run/secrets/</code> — the same mechanism production uses, where the files are projected from a
+    SOPS-encrypted Kubernetes Secret. Using environment variables locally and files in production would mean the code
+    path that reads secrets is never exercised until it fails in a cluster.
+  </p>
+  <p>The file name is the property name: <code>spring.datasource.password</code> becomes the Spring property of the same name.</p>
+
+  <H s={o['exercise-the-claims']} />
+  <div class="rows">
+    {drills.map(([cmd, what]) => <div class="row"><code>{cmd}</code><span>{what}</span></div>)}
+  </div>
+  <p>
+    <code>make drill</code> needs kind and kubectl; under podman it runs kind rootless. The first run pulls node and
+    application images and takes several minutes.
+  </p>
+
+  <H s={o.stores} />
+  <div class="rows">
+    {stores.map(([cmd, what]) => <div class="row"><code>{cmd}</code><span>{what}</span></div>)}
+  </div>
+
+  <H s={o['tear-down']} />
+  <p>
+    <code>make down</code> stops everything and deletes the volumes. That is destructive on purpose: a teardown that
+    leaves a stale database volume behind is how a stack that works on one machine stops working on the next.
+  </p>
+  <p>Every target, with what it does, is in <a href={u('/reference/make/')}>Make targets</a>.</p>
+</Page>
