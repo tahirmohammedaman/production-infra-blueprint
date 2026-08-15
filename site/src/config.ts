@@ -36,6 +36,8 @@ export const nav: NavGroup[] = [
     items: [
       { title: 'Introduction', route: '/' },
       { title: 'Quickstart', route: '/quickstart/' },
+      { title: 'What running it found', route: '/findings/' },
+      { title: 'Build record', route: '/build-record/' },
     ],
   },
   {

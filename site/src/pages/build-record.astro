@@ -1,0 +1,89 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import { phases } from '../data/build-record';
+import { site } from '../config';
+import { outlines, headingsFor } from '../lib/outlines';
+import { withBase as u } from '../lib/paths';
+
+const o = outlines['/build-record/'];
+const commits = phases.flatMap((p) => p.commits);
+
+// One column per calendar day, first commit to last.
+const first = new Date('2026-07-04T00:00:00Z');
+const last = new Date('2026-08-09T00:00:00Z');
+const days: { date: Date; count: number }[] = [];
+for (let d = new Date(first); d <= last; d.setUTCDate(d.getUTCDate() + 1)) {
+  const key = d.toISOString().slice(0, 10);
+  days.push({ date: new Date(d), count: commits.filter((c) => c.at.startsWith(key)).length });
+}
+const max = Math.max(...days.map((d) => d.count));
+const label = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+---
+
+<Page
+  title="Build record"
+  route="/build-record/"
+  headings={headingsFor('/build-record/')}
+  intro={`${commits.length} commits across five weeks, in seven phases. Each phase ends with something that runs; the fixes that running it forced are commits of their own.`}
+>
+  <H s={o.calendar} />
+  <figure class="chart">
+    <p class="chart-title">Commits per day</p>
+    <p class="chart-sub">4 July – 9 August 2026 · peak of {max} a day · hover a column for its date</p>
+    <div style="overflow-x: auto">
+      <div class="calendar" style={`--days: ${days.length}`} role="img" aria-label={`Commits per day between ${label(first)} and ${label(last)}`}>
+        {
+          days.map((d) => (
+            <div class="day" title={`${label(d.date)}: ${d.count} commit${d.count === 1 ? '' : 's'}`}>
+              <span class={d.count === 0 ? 'none' : ''} style={`height: ${(d.count / max) * 72}px`} />
+              <i>{d.date.getUTCDate()}</i>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </figure>
+  <p>
+    Commit messages are one-line conventional commits. The history is linear and coarse on purpose: a commit is a unit of
+    work finished in a sitting — “the whole log pipeline” — not a file.
+  </p>
+
+  <H s={o.phases} />
+  <div class="phases">
+    {
+      phases.map((p) => (
+        <section class="phase" aria-labelledby={`phase-${p.id}`}>
+          <div class="phase-head">
+            <span class="phase-id">{p.id}</span>
+            <h3 class="phase-title" id={`phase-${p.id}`}>{p.title}</h3>
+            <span class="phase-when">{p.window} · {p.commits.length} commits</span>
+          </div>
+          <p>{p.note}</p>
+          <ul class="commits">
+            {p.commits.map((c) => (
+              <li>
+                <time datetime={c.at.replace(' ', 'T') + '+03:00'}>
+                  <a href={`${site.repo}/commit/${c.sha}`} rel="noopener">{c.sha}</a> {c.at.slice(5, 10)}
+                </time>
+                <span>{c.subject}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))
+    }
+  </div>
+
+  <H s={o['not-yet']} />
+  <p>Recorded where they belong, and gathered here:</p>
+  <ul>
+    <li><strong>The first live deploy.</strong> <code>terraform apply</code>, the playbook on a real node, Flux bootstrapping, Let’s Encrypt issuance, and object storage against Hetzner’s own endpoint — <a href={u('/operations/#what-has-been-run-and-where')}>Operations</a>.</li>
+    <li><strong>Least-privilege database roles:</strong> an owner for Flyway, a DML-only role for the API, <code>pg_monitor</code> for the exporter — <a href={u('/security/#known-gaps')}>Security, known gaps</a>.</li>
+    <li><strong>Client-side backup encryption</strong> with a key stored off the cluster — <a href={u('/decisions/0009-point-in-time-recovery-from-archived-wal/')}>ADR 0009</a>.</li>
+    <li><strong>The k3s audit log shipped through Alloy</strong>, and the admission webhook’s own metrics scraped.</li>
+    <li><strong>A policy-controller release that reads bundle signatures</strong>, and then dropping the legacy signing flags from the build workflow.</li>
+    <li><strong>Error-and-slow-only gateway access logs</strong>, about three quarters less log volume, once traffic makes it worth it — <a href={u('/cost/#logs')}>Cost analysis</a>.</li>
+    <li><strong>Scale-to-zero for a dev environment</strong>, if one is ever reconciled onto the node.</li>
+  </ul>
+</Page>

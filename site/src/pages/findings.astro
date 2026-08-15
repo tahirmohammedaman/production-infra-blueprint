@@ -1,0 +1,73 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import { findingGroups } from '../data/findings';
+import { outlines, headingsFor } from '../lib/outlines';
+import { withBase } from '../lib/paths';
+
+const o = outlines['/findings/'];
+const total = findingGroups.reduce((n, g) => n + g.findings.length, 0);
+
+const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const inline = (s: string) => escape(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+const href = (target: string) => (target.startsWith('http') ? target : withBase(target));
+
+let n = 0;
+const groups = findingGroups.map((g) => ({ ...g, findings: g.findings.map((f) => ({ ...f, id: `f-${String(++n).padStart(2, '0')}` })) }));
+---
+
+<Page
+  title="What running it found"
+  route="/findings/"
+  headings={headingsFor('/findings/')}
+  intro={`Every layer passed its linters and validators before it first ran, and the defects below were invisible to all of them. Each was found by running the thing — <b>${total} of them, fixed, and most with a test, a rule or a drill that would catch it again</b>.`}
+>
+  <H s={o['how-to-read']} />
+  <p>
+    A configuration that validates and a configuration that works are different claims, and the gap between them was
+    found, repeatedly, by causing the failure the configuration was meant to handle. This page keeps that record, because
+    it says more about how the system was built than the list of what it contains.
+  </p>
+  <p>
+    Each entry says what was wrong, how it surfaced, and what changed. Where the fix is written up in a decision record,
+    runbook or document, the entry links to it.
+  </p>
+
+  {
+    groups.map((group) => (
+      <>
+        <H s={o[group.id as keyof typeof o] as (typeof o)['async']} />
+        <div class="findings">
+          {group.findings.map((f) => (
+            <article class="finding" id={f.id}>
+              <span class="finding-id">{f.id.toUpperCase()}</span>
+              <div>
+                <h3 set:html={inline(f.title)} />
+                <p set:html={inline(f.what)} />
+                <dl>
+                  <dt>Found</dt>
+                  <dd set:html={inline(f.found)} />
+                  <dt>Fixed</dt>
+                  <dd set:html={inline(f.fix)} />
+                  {f.refs && (
+                    <>
+                      <dt>See</dt>
+                      <dd>
+                        {f.refs.map(([label, target], i) => (
+                          <>
+                            {i > 0 && ' · '}
+                            <a href={href(target)}>{label}</a>
+                          </>
+                        ))}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+            </article>
+          ))}
+        </div>
+      </>
+    ))
+  }
+</Page>
