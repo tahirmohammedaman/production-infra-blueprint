@@ -1,0 +1,22 @@
+---
+import Base from '../layouts/Base.astro';
+import { withBase as u } from '../lib/paths';
+---
+
+<Base title="Sheet not found">
+  <main class="main" id="content" style="max-width: 46rem; margin: 0 auto">
+    <header class="page-header">
+      <ul class="eyebrow"><li>404</li><li>No such sheet</li></ul>
+      <h1 class="page-title">This sheet is not in the set</h1>
+      <p class="page-intro">
+        The page may have moved when a document was renamed. Search with <kbd>/</kbd>, or start from one of these.
+      </p>
+    </header>
+    <div class="cards">
+      <a class="card" href={u('/')}><span class="card-kicker">Overview</span><span class="card-title">Introduction</span></a>
+      <a class="card" href={u('/architecture/')}><span class="card-kicker">Architecture</span><span class="card-title">System architecture</span></a>
+      <a class="card" href={u('/runbooks/')}><span class="card-kicker">Reliability</span><span class="card-title">Runbooks</span></a>
+      <a class="card" href={u('/reference/repository/')}><span class="card-kicker">Reference</span><span class="card-title">Repository map</span></a>
+    </div>
+  </main>
+</Base>

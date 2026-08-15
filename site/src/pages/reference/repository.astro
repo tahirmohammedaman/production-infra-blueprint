@@ -1,0 +1,71 @@
+---
+import Page from '../../layouts/Page.astro';
+import H from '../../components/H.astro';
+import { outlines, headingsFor } from '../../lib/outlines';
+import { githubUrl as gh, withBase as u } from '../../lib/paths';
+
+const o = outlines['/reference/repository/'];
+
+const lookFirst: [string, string, string][] = [
+  ['docs/cost-analysis.md', '/cost/', 'Every footprint with its method, and the monthly bill against two AWS builds, line by line.'],
+  ['docs/operations.md', '/operations/', 'What fits on the node, the connection budget, schedules, and what has not yet run live.'],
+  ['docs/security.md', '/security/', 'Controls layer by layer, the admission test results, and the known gaps.'],
+  ['docs/adr/', '/decisions/', 'The close calls, including the ones that cost something — ADR 0004 on Kafka above all.'],
+  ['services/api/src/main/java/dev/tahir/blueprint/outbox/', '', 'The transactional outbox and its relay: why a broker outage cannot corrupt state or take the API down.'],
+  ['scripts/zero-downtime-drill.sh', '', 'The zero-downtime claim, tested by causing a rollout under load. Weekly in CI.'],
+  ['scripts/restore-drill.sh', '', 'The point-in-time restore claim, tested by destroying the database. Weekly in CI.'],
+  ['observability/prometheus/tests/', '', 'Unit tests showing when every alert fires, and when it stays quiet.'],
+  ['.semgrep/blueprint.yml', '/reference/invariants/', 'Five rules encoding invariants this system depends on.'],
+];
+---
+
+<Page
+  title="Repository map"
+  route="/reference/repository/"
+  headings={headingsFor('/reference/repository/')}
+  intro="Where each layer lives. Every directory below is linked to its source; the ones with their own page here are linked to that instead."
+>
+  <H s={o.tree} />
+  <div class="tree" role="region" aria-label="Repository layout" tabindex="0"><b>production-infra-blueprint/</b>
+├── <a href={gh('Makefile')}>Makefile</a>                     <i>the single entrypoint — <a href={u('/reference/make/')}>every target</a></i>
+├── <a href={gh('README.md')}>README.md</a>  <a href={gh('.env.example')}>.env.example</a>  <a href={gh('.pre-commit-config.yaml')}>.pre-commit-config.yaml</a>
+│
+├── <b><a href={gh('services')}>services/</a></b>                    <i>Gradle multi-project, one Dockerfile for both services</i>
+│   ├── <a href={gh('services/platform')}>platform/</a>                <i>correlation ids, problem details, event contracts, drain, span filter</i>
+│   ├── <a href={gh('services/api')}>api/</a>                     <i>REST, schema owner, cache-aside, outbox writer and relay, reconciler</i>
+│   └── <a href={gh('services/worker')}>worker/</a>                  <i>Kafka consumer: idempotency guard, bounded retry, dead-letter topic</i>
+│
+├── <b>deploy/</b>
+│   ├── <a href={gh('deploy/compose')}>compose/</a>                 <i>the local stack, observability overlay, podman overlay</i>
+│   └── <a href={u('/platform/kubernetes/')}>k8s/</a>                     <i>base, config, data, migrations, overlays, restore, infrastructure</i>
+├── <b><a href={gh('clusters/prod')}>clusters/prod/</a></b>               <i>what Flux reconciles, and in what order</i>
+│
+├── <b>infra/</b>
+│   ├── <a href={u('/platform/terraform/')}>terraform/</a>               <i>modules: network, firewall, node, storage, dns · envs/prod</i>
+│   └── <a href={u('/platform/ansible/')}>ansible/</a>                 <i>roles: base, hardening, storage, k3s</i>
+│
+├── <b><a href={u('/platform/observability/')}>observability/</a></b>               <i>prometheus, alertmanager, loki, alloy, tempo, grafana — one set, two environments</i>
+├── <b><a href={gh('load/k6')}>load/k6/</a></b>                     <i>steady and rollout profiles</i>
+├── <b><a href={gh('scripts')}>scripts/</a></b>                     <i>bootstrap, smoke test, both drills, render and verify helpers</i>
+├── <b><a href={gh('.github/workflows')}>.github/workflows/</a></b>            <i>ci, security, build, drills — <a href={u('/delivery/')}>delivery pipeline</a></i>
+├── <b><a href={gh('.semgrep')}>.semgrep/</a></b>                    <i>rules specific to this repository</i>
+│
+├── <b>docs/</b>
+│   ├── <a href={u('/architecture/')}>architecture.md</a>  <a href={u('/security/')}>security.md</a>  <a href={u('/operations/')}>operations.md</a>  <a href={u('/slo/')}>slo.md</a>  <a href={u('/cost/')}>cost-analysis.md</a>
+│   ├── <a href={u('/decisions/')}>adr/</a>                     <i>0001 – 0010</i>
+│   └── <a href={u('/runbooks/')}>runbooks/</a>                <i>written for whoever is on call</i>
+│
+└── <b><a href={gh('site')}>site/</a></b>                        <i>this site, rendered from the files above</i></div>
+
+  <H s={o['look-first']} />
+  <div class="rows">
+    {
+      lookFirst.map(([path, route, why]) => (
+        <div class="row">
+          <a href={route ? u(route) : gh(path)} rel={route ? undefined : 'noopener'}>{path}</a>
+          <span>{why}</span>
+        </div>
+      ))
+    }
+  </div>
+</Page>

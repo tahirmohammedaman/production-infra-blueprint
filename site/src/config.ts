@@ -69,6 +69,7 @@ export const nav: NavGroup[] = [
     title: 'Reliability',
     items: [
       { title: 'Service level objectives', route: '/slo/', source: 'docs/slo.md' },
+      { title: 'Alert catalog', route: '/alerts/' },
       { title: 'Runbooks', route: '/runbooks/', collection: 'runbooks' },
     ],
   },
@@ -79,6 +80,15 @@ export const nav: NavGroup[] = [
       { title: 'Operations', route: '/operations/', source: 'docs/operations.md' },
       { title: 'Cost analysis', route: '/cost/', source: 'docs/cost-analysis.md' },
       { title: 'Measurements', route: '/measurements/' },
+    ],
+  },
+  {
+    id: 'reference',
+    title: 'Reference',
+    items: [
+      { title: 'Make targets', route: '/reference/make/' },
+      { title: 'Enforced invariants', route: '/reference/invariants/' },
+      { title: 'Repository map', route: '/reference/repository/' },
     ],
   },
 ];

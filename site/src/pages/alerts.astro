@@ -1,0 +1,90 @@
+---
+import Page from '../layouts/Page.astro';
+import H from '../components/H.astro';
+import { alertRules } from '../lib/repo-data';
+import { outlines, headingsFor } from '../lib/outlines';
+import { githubUrl, withBase as u } from '../lib/paths';
+
+const o = outlines['/alerts/'];
+const alerts = alertRules();
+const pages = alerts.filter((a) => a.severity === 'page').length;
+const tickets = alerts.filter((a) => a.severity === 'ticket').length;
+const groups = [...new Set(alerts.map((a) => a.group))];
+// Alertmanager fills these in when it notifies; on the page they read as placeholders.
+const readable = (s: string) =>
+  s.replace(/\{\{\s*\$labels\.(\w+)\s*\}\}/g, '‹$1›').replace(/\{\{\s*\$value[^}]*\}\}/g, '‹value›');
+---
+
+<Page
+  title="Alert catalog"
+  route="/alerts/"
+  headings={headingsFor('/alerts/')}
+  intro={`Every alert in the rule files, read from them when this site is built: <b>${alerts.length} alerts — ${pages} that page and ${tickets} that raise a ticket</b>. Each has a promtool unit test and a runbook section.`}
+>
+  <H s={o.severities} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Severity</th><th>Bar</th><th>Channel</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill pill-crit">page</span></td><td>User-visible impact now, or a hole in monitoring that would hide it. Someone is woken up, so it has to be actionable at 03:00.</td><td>PagerDuty</td></tr>
+        <tr><td><span class="pill pill-warn">ticket</span></td><td>Something is wrong that nobody outside will notice yet. Looked at in working hours, before it becomes a page.</td><td>Slack</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    What is deliberately absent: CPU, memory or disk above 80%. Those are causes, and a cause that is not hurting anyone is
+    not worth waking someone for. The error budget pages when users are hurt, whatever the cause turns out to be
+    (<a href={u('/slo/')}>Service level objectives</a>). Locally, the <code>env="local"</code> label routes every alert to
+    a receiver with no integrations, so they fire and are visible and nobody's phone rings.
+  </p>
+
+  <H s={o.catalog} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Alert</th><th>Severity</th><th class="num">For</th><th>What it says</th></tr></thead>
+      <tbody>
+        {
+          groups.map((group) => (
+            <>
+              <tr class="group"><td colspan="4">{group}</td></tr>
+              {alerts
+                .filter((a) => a.group === group)
+                .map((a) => (
+                  <tr id={a.name.toLowerCase()}>
+                    <td class="mono">
+                      {a.runbookAnchor ? <a href={u(`/runbooks/alerts/#${a.runbookAnchor}`)}>{a.name}</a> : a.name}
+                      <br />
+                      <span style="color: var(--ink-3)">{readable(a.service)}</span>
+                    </td>
+                    <td><span class:list={['pill', a.severity === 'page' ? 'pill-crit' : 'pill-warn']}>{a.severity}</span></td>
+                    <td class="num">{a.for}</td>
+                    <td>
+                      <strong>{readable(a.summary)}</strong>
+                      {a.description && <><br />{readable(a.description)}</>}
+                    </td>
+                  </tr>
+                ))}
+            </>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">
+    Read from <a href={githubUrl('observability/prometheus/rules/alerts.yml')} rel="noopener">rules/alerts.yml</a> and
+    <a href={githubUrl('observability/prometheus/rules/slo.yml')} rel="noopener">rules/slo.yml</a>. The burn-rate alerts
+    are each written once per window pair and listed once. The alert name opens its runbook section.
+  </p>
+
+  <H s={o['adding-an-alert']} />
+  <p>Three changes, in one commit:</p>
+  <ol>
+    <li><strong>The rule</strong>, in <code>observability/prometheus/rules/</code>, with a <code>service</code> label and a <code>runbook_url</code>.</li>
+    <li><strong>A test</strong> in <code>observability/prometheus/tests/</code> that shows when it fires — and, just as important, when it must stay quiet. Sample series at one minute, or the five-minute lookback makes them stale between samples and <code>for</code> never completes.</li>
+    <li><strong>A section</strong> in <a href={u('/runbooks/alerts/')}>the alerts runbook</a>: what it means, what users see, where to look first, and what makes it stop.</li>
+  </ol>
+  <p>
+    <code>make obs-validate</code> runs every configuration through its own binary, the rule tests and the routing tree —
+    exactly the CI job, with the same pinned images. An alert without a runbook wakes someone up to guess.
+  </p>
+</Page>

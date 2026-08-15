@@ -1,0 +1,49 @@
+---
+import Page from '../../layouts/Page.astro';
+import H from '../../components/H.astro';
+import { makeTargets } from '../../lib/repo-data';
+import { outlines, headingsFor } from '../../lib/outlines';
+import { githubUrl } from '../../lib/paths';
+
+const o = outlines['/reference/make/'];
+const sections = makeTargets();
+const count = sections.reduce((n, s) => n + s.targets.length, 0);
+const targetId =(name: string) => `make-${name.replace(/[^a-z0-9]+/gi, '-').replace(/-+$/, '').toLowerCase()}`;
+---
+
+<Page
+  title="Make targets"
+  route="/reference/make/"
+  headings={headingsFor('/reference/make/')}
+  source="Makefile"
+  intro={`The single entrypoint for every workflow in the repository — <b>${count} targets</b>, read from the Makefile's own <code>##</code> comments when this site is built. There are no undocumented steps.`}
+>
+  <H s={o.targets} />
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Target</th><th>What it does</th></tr></thead>
+      <tbody>
+        {
+          sections.map((section) => (
+            <>
+              <tr class="group"><td colspan="2">{section.title}</td></tr>
+              {section.targets.map((t) => (
+                <tr id={targetId(t.name)}>
+                  <td class="mono" style="white-space: nowrap">make {t.name}</td>
+                  <td>{t.description}</td>
+                </tr>
+              ))}
+            </>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The Makefile detects Docker or podman, the compose implementation and the runtime socket, and applies the SELinux
+    overlay for rootless podman where it is needed; <code>make doctor</code> prints what it found. Targets that need
+    cloud credentials — <code>tf-plan</code>, <code>provision</code> — read them from the environment and never from a
+    file in the repository.
+  </p>
+  <p><a href={githubUrl('Makefile')} class="ext" rel="noopener">The Makefile, on GitHub</a></p>
+</Page>

@@ -1,0 +1,47 @@
+---
+import Page from '../../layouts/Page.astro';
+import H from '../../components/H.astro';
+import Code from '../../components/Code.astro';
+import { semgrepRules } from '../../lib/repo-data';
+import { outlines, headingsFor } from '../../lib/outlines';
+
+const o = outlines['/reference/invariants/'];
+const { preamble, rules } = semgrepRules();
+const title = (id: string) => id.replace(/^blueprint-/, '').replace(/-/g, ' ');
+---
+
+<Page
+  title="Enforced invariants"
+  route="/reference/invariants/"
+  headings={headingsFor('/reference/invariants/')}
+  source=".semgrep/blueprint.yml"
+  intro={`Conventions this system depends on, written as semgrep rules that fail CI — <b>${rules.length} rules</b>, read from the rule file when this site is built. A convention that lives only in a reviewer's memory is not enforced.`}
+>
+  <H s={o.rules} />
+  <p>{preamble}</p>
+  <div class="findings">
+    {
+      rules.map((rule, i) => (
+        <article class="finding" id={rule.id}>
+          <span class="finding-id">R-{String(i + 1).padStart(2, '0')}</span>
+          <div>
+            <h3>{title(rule.id).charAt(0).toUpperCase() + title(rule.id).slice(1)}</h3>
+            <p>{rule.message}</p>
+            <dl>
+              <dt>Rule</dt>
+              <dd><code>{rule.id}</code> <span class="pill pill-crit">{rule.severity}</span></dd>
+              <dt>Applies to</dt>
+              <dd>{rule.paths.map((p, j) => <>{j > 0 && ' · '}<code>{p}</code></>)}</dd>
+            </dl>
+            <Code code={rule.patterns.join('\n')} lang="yaml" />
+          </div>
+        </article>
+      ))
+    }
+  </div>
+  <p>
+    The security workflow runs these alongside the community <code>p/java</code>, <code>p/secrets</code> and
+    <code>p/dockerfile</code> rulesets, with <code>--error</code>, so a match fails the build. Each rule was proven to fire
+    against deliberately bad input before it was trusted to pass good input.
+  </p>
+</Page>
