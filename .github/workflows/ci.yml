@@ -52,6 +52,7 @@ jobs:
       infra: ${{ steps.filter.outputs.infra }}
       manifests: ${{ steps.filter.outputs.manifests }}
       observability: ${{ steps.filter.outputs.observability }}
+      site: ${{ steps.filter.outputs.site }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -84,6 +85,14 @@ jobs:
               - 'observability/**'
               - 'deploy/compose/docker-compose.observability.yml'
               - 'scripts/validate-observability.sh'
+            # Everything the documentation site reads when it is built.
+            site:
+              - 'site/**'
+              - 'docs/**'
+              - '**/README.md'
+              - 'observability/prometheus/rules/**'
+              - '.semgrep/**'
+              - 'Makefile'
             workflows:
               - '.github/**'
             scripts:
@@ -230,6 +239,32 @@ jobs:
       - name: Validate configuration and run the alert unit tests
         run: scripts/validate-observability.sh
 
+  # The documentation site renders docs/, the component READMEs, the Makefile, the alert rules and
+  # the semgrep rules. Building it is how a link to a renamed file or a heading that no longer
+  # exists is found in a pull request instead of by a reader: the markdown pipeline refuses a link
+  # to a missing file, and the link check refuses a missing page or anchor.
+  site:
+    name: documentation site
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      # --ignore-scripts: no dependency gets to run code at install time. Nothing in this tree
+      # needs a lifecycle script; the native binaries arrive as platform packages.
+      - name: Build and check every internal link
+        working-directory: site
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
   test:
     name: test (${{ matrix.service }})
     runs-on: ubuntu-24.04
@@ -312,7 +347,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-24.04
-    needs: [changes, format, static, infra, manifests, observability, test]
+    needs: [changes, format, static, infra, manifests, observability, site, test]
     if: always()
     steps:
       - name: Verify no upstream job failed

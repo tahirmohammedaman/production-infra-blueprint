@@ -268,6 +268,7 @@ fixed, tested and written up where it was found.
 | `docs/slo.md` | The objectives, the error budget and its policy |
 | `docs/adr/` | Architecture decision records, 0001 to 0010 |
 | `docs/runbooks/` | `incident-triage`, `alerts`, `rollback`, `db-restore`, `cert-expiry` and `zero-downtime-migration` — written for whoever is on call |
+| `site/` | All of the above as a static site, with the diagrams drawn, every cross-reference linked, and the alert catalog, make targets and semgrep rules read from the repository — `make site` |
 
 ![The Blueprint / SLOs dashboard: each objective's 30-day SLI, remaining budget, and burn rate](docs/images/grafana-slo.png)
 

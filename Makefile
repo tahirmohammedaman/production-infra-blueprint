@@ -304,6 +304,18 @@ lint-ci: ## Lint the workflow files and shell scripts the way CI does
 		rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color
 	scripts/check-action-pins.sh
 
+# -------------------------------------------------------------- documentation
+
+SITE_DIR := site
+
+.PHONY: site
+site: ## Build the documentation site into site/dist and fail on any broken internal link
+	cd $(SITE_DIR) && npm ci --ignore-scripts && npm run build
+
+.PHONY: site-dev
+site-dev: ## Serve the documentation site with live reload at http://localhost:4321
+	cd $(SITE_DIR) && npm ci --ignore-scripts && npm run dev
+
 # ---------------------------------------------------------------- diagnostics
 
 .PHONY: version
